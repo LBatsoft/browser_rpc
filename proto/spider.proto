@@ -1,0 +1,226 @@
+syntax = "proto3";
+
+package spider;
+
+// 浏览器 RPC 服务
+service BrowserService {
+  // 创建新的浏览器会话
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  
+  // 关闭浏览器会话
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+  
+  // 导航到指定 URL
+  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+  
+  // 执行 JavaScript
+  rpc ExecuteScript(ExecuteScriptRequest) returns (ExecuteScriptResponse);
+  
+  // 获取页面内容
+  rpc GetPageContent(GetPageContentRequest) returns (GetPageContentResponse);
+  
+  // 获取拦截的网络请求
+  rpc GetNetworkRequests(GetNetworkRequestsRequest) returns (GetNetworkRequestsResponse);
+  
+  // 等待元素出现
+  rpc WaitForElement(WaitForElementRequest) returns (WaitForElementResponse);
+  
+  // 点击元素
+  rpc ClickElement(ClickElementRequest) returns (ClickElementResponse);
+  
+  // 输入文本
+  rpc TypeText(TypeTextRequest) returns (TypeTextResponse);
+  
+  // 截图
+  rpc TakeScreenshot(TakeScreenshotRequest) returns (TakeScreenshotResponse);
+  
+  // 设置请求头
+  rpc SetHeaders(SetHeadersRequest) returns (SetHeadersResponse);
+  
+  // 设置 Cookie
+  rpc SetCookies(SetCookiesRequest) returns (SetCookiesResponse);
+  
+  // 获取 Cookie
+  rpc GetCookies(GetCookiesRequest) returns (GetCookiesResponse);
+}
+
+// 创建会话请求
+message CreateSessionRequest {
+  bool headless = 1;  // 是否无头模式
+  string user_agent = 2;  // 自定义 User-Agent
+  repeated string proxy = 3;  // 代理设置
+  int32 width = 4;  // 窗口宽度
+  int32 height = 5;  // 窗口高度
+}
+
+message CreateSessionResponse {
+  string session_id = 1;  // 会话 ID
+  bool success = 2;
+  string message = 3;
+}
+
+// 关闭会话请求
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message CloseSessionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 导航请求
+message NavigateRequest {
+  string session_id = 1;
+  string url = 2;
+  int32 timeout = 3;  // 超时时间（秒）
+}
+
+message NavigateResponse {
+  bool success = 1;
+  string message = 2;
+  string final_url = 3;  // 最终 URL（可能发生重定向）
+}
+
+// 执行脚本请求
+message ExecuteScriptRequest {
+  string session_id = 1;
+  string script = 2;
+}
+
+message ExecuteScriptResponse {
+  bool success = 1;
+  string result = 2;  // JSON 格式的结果
+  string error = 3;
+}
+
+// 获取页面内容请求
+message GetPageContentRequest {
+  string session_id = 1;
+}
+
+message GetPageContentResponse {
+  bool success = 1;
+  string html = 2;
+  string message = 3;
+}
+
+// 网络请求记录
+message NetworkRequest {
+  string request_id = 1;
+  string url = 2;
+  string method = 3;
+  map<string, string> headers = 4;
+  string post_data = 5;
+  int32 status_code = 6;
+  string response_body = 7;
+  map<string, string> response_headers = 8;
+  double timestamp = 9;
+}
+
+message GetNetworkRequestsRequest {
+  string session_id = 1;
+  string url_pattern = 2;  // URL 过滤模式（正则表达式）
+}
+
+message GetNetworkRequestsResponse {
+  bool success = 1;
+  repeated NetworkRequest requests = 2;
+  string message = 3;
+}
+
+// 等待元素请求
+message WaitForElementRequest {
+  string session_id = 1;
+  string selector = 2;  // CSS 选择器
+  int32 timeout = 3;  // 超时时间（秒）
+}
+
+message WaitForElementResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 点击元素请求
+message ClickElementRequest {
+  string session_id = 1;
+  string selector = 2;  // CSS 选择器
+}
+
+message ClickElementResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 输入文本请求
+message TypeTextRequest {
+  string session_id = 1;
+  string selector = 2;  // CSS 选择器
+  string text = 3;
+}
+
+message TypeTextResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 截图请求
+message TakeScreenshotRequest {
+  string session_id = 1;
+  string selector = 2;  // 可选：元素选择器
+  bool full_page = 3;  // 是否全页截图
+}
+
+message TakeScreenshotResponse {
+  bool success = 1;
+  bytes image_data = 2;  // PNG 格式的图片数据
+  string message = 3;
+}
+
+// 设置请求头
+message SetHeadersRequest {
+  string session_id = 1;
+  map<string, string> headers = 2;
+}
+
+message SetHeadersResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Cookie 定义
+message Cookie {
+  string name = 1;
+  string value = 2;
+  string domain = 3;
+  string path = 4;
+  double expires = 5;
+  bool http_only = 6;
+  bool secure = 7;
+  string same_site = 8;
+}
+
+// 设置 Cookie
+message SetCookiesRequest {
+  string session_id = 1;
+  repeated Cookie cookies = 2;
+}
+
+message SetCookiesResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 获取 Cookie
+message GetCookiesRequest {
+  string session_id = 1;
+  string url = 2;  // 可选：特定 URL 的 Cookie
+}
+
+message GetCookiesResponse {
+  bool success = 1;
+  repeated Cookie cookies = 2;
+  string message = 3;
+}
+
+
