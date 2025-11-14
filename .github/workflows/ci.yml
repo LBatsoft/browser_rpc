@@ -42,7 +42,8 @@ jobs:
     - name: Install Playwright browsers
       run: |
         playwright install chromium
-        playwright install-deps chromium
+        # Skip system dependencies for headless mode (not required for CI)
+        # playwright install-deps chromium
 
     - name: Compile Proto files
       run: |
@@ -118,7 +119,8 @@ jobs:
       run: |
         pip install -r requirements.txt
         playwright install chromium
-        playwright install-deps chromium
+        # Skip system dependencies for headless mode (not required for CI)
+        # playwright install-deps chromium
 
     - name: Compile Proto files
       run: |
