@@ -18,7 +18,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-THIRD_PARTY_STEALTH_PATH = BASE_DIR / 'resources' / 'stealth' / 'stealth.min.js'
+THIRD_PARTY_STEALTH_PATH = BASE_DIR / 'resources' / 'stealth' / 'third_party_stealth.min.js'
 
 
 class NetworkInterceptor:

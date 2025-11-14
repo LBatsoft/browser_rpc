@@ -13,10 +13,10 @@ exclude =
     build,
     dist
 ignore =
-    E203,  # whitespace before ':'
-    E266,  # too many leading '#' for block comment
-    E501,  # line too long (handled by max-line-length)
-    W503,  # line break before binary operator
-    F403,  # unable to detect undefined names
-    F401   # imported but unused
+    E203,
+    E266,
+    E501,
+    W503,
+    F403,
+    F401
 
