@@ -14,6 +14,10 @@ class BrowserRPCConfig:
     RPC_PORT: int = 50051
     RPC_MAX_WORKERS: int = 10
     
+    # HTTP 服务器配置
+    HTTP_HOST: str = '0.0.0.0'
+    HTTP_PORT: int = 8000
+    
     # 浏览器池配置
     MAX_SESSIONS: int = 10
     SESSION_TIMEOUT: int = 3600  # 会话超时时间（秒）

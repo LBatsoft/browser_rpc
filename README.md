@@ -47,13 +47,26 @@ playwright install chromium
 
 ### Start Server
 
+**gRPC Server:**
 ```bash
 ./scripts/start_rpc_server.sh
 # or
 python rpc_server.py
 ```
 
-### Basic Example
+**HTTP Server:**
+```bash
+./scripts/start_http_server.sh
+# or
+python http_server.py
+```
+
+The HTTP server provides:
+- **API Documentation**: http://localhost:8000/docs (Swagger UI)
+- **ReDoc**: http://localhost:8000/redoc
+- **REST API**: http://localhost:8000/api/*
+
+### Basic Example (gRPC)
 
 ```python
 import asyncio
@@ -73,6 +86,34 @@ async def main():
     html = await client.get_page_content()
     
     await client.close()
+
+asyncio.run(main())
+```
+
+### Basic Example (HTTP)
+
+```python
+import asyncio
+from http_client import BrowserHTTPClient
+
+async def main():
+    client = BrowserHTTPClient(base_url='http://localhost:8000')
+    
+    try:
+        # Create session
+        await client.create_session(headless=True)
+        
+        # Navigate to page
+        await client.navigate('https://www.example.com')
+        
+        # Get content
+        html = await client.get_page_content()
+        
+        # Take screenshot
+        await client.take_screenshot(save_path='page.png', full_page=True)
+        
+    finally:
+        await client.close()
 
 asyncio.run(main())
 ```
@@ -106,8 +147,29 @@ await client.take_screenshot(save_path='page.png', full_page=True)
 requests = await client.get_network_requests(url_pattern=r'/api/')
 for req in requests:
     print(f"{req['method']} {req['url']}")
-    print(f"Response: {req['response_body']}")
+    if req.get('response'):
+        print(f"Response: {req['response']['body']}")
 ```
+
+### HTTP API Endpoints
+
+The HTTP server provides RESTful API endpoints:
+
+- `POST /api/sessions` - Create browser session
+- `DELETE /api/sessions/{session_id}` - Close session
+- `POST /api/sessions/{session_id}/navigate` - Navigate to URL
+- `POST /api/sessions/{session_id}/execute` - Execute JavaScript
+- `GET /api/sessions/{session_id}/content` - Get page HTML
+- `POST /api/sessions/{session_id}/network` - Get network requests
+- `POST /api/sessions/{session_id}/wait` - Wait for element
+- `POST /api/sessions/{session_id}/click` - Click element
+- `POST /api/sessions/{session_id}/type` - Type text
+- `POST /api/sessions/{session_id}/screenshot` - Take screenshot
+- `POST /api/sessions/{session_id}/headers` - Set headers
+- `POST /api/sessions/{session_id}/cookies` - Set cookies
+- `GET /api/sessions/{session_id}/cookies` - Get cookies
+
+Visit http://localhost:8000/docs for interactive API documentation.
 
 ## 📋 Available RPC APIs
 
