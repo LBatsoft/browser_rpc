@@ -238,7 +238,7 @@ This project uses GitHub Actions for continuous integration and deployment:
 
 - **CD Workflow** (`.github/workflows/cd.yml`):
   - Creates release archives for version tags
-  - Builds documentation pages
+  - Optional GitHub Pages deployment (commented out by default, see workflow file for instructions)
 
 The CI pipeline runs automatically on every push and pull request to the `master` branch.
 

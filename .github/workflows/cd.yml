@@ -46,33 +46,47 @@ jobs:
         name: browser_rpc-${{ github.ref_name }}
         path: dist/browser_rpc-${{ github.ref_name }}.tar.gz
 
-  deploy-docs:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup Pages
-      uses: actions/configure-pages@v4
-
-    - name: Build documentation
-      run: |
-        echo "# Browser RPC Documentation" > index.md
-        echo "" >> index.md
-        echo "## Project Documentation" >> index.md
-        echo "" >> index.md
-        if [ -f "docs/README_CN.md" ]; then
-          echo "- [中文文档](docs/README_CN.md)" >> index.md
-        fi
-        if [ -f "docs/startup_guide.md" ]; then
-          echo "- [启动指南](docs/startup_guide.md)" >> index.md
-        fi
-        if [ -f "docs/anti_detection_notes.md" ]; then
-          echo "- [反检测说明](docs/anti_detection_notes.md)" >> index.md
-        fi
-
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: '.'
+  # GitHub Pages deployment (optional)
+  # To enable: Go to repository Settings > Pages > Source: GitHub Actions
+  # deploy-docs:
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/master'
+  #   permissions:
+  #     contents: read
+  #     pages: write
+  #     id-token: write
+  #   environment:
+  #     name: github-pages
+  #     url: ${{ steps.deployment.outputs.page_url }}
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #
+  #   - name: Setup Pages
+  #     uses: actions/configure-pages@v4
+  #
+  #   - name: Build documentation
+  #     run: |
+  #       mkdir -p _site
+  #       echo "# Browser RPC Documentation" > _site/index.md
+  #       echo "" >> _site/index.md
+  #       echo "## Project Documentation" >> _site/index.md
+  #       echo "" >> _site/index.md
+  #       if [ -f "docs/README_CN.md" ]; then
+  #         echo "- [中文文档](../docs/README_CN.md)" >> _site/index.md
+  #       fi
+  #       if [ -f "docs/startup_guide.md" ]; then
+  #         echo "- [启动指南](../docs/startup_guide.md)" >> _site/index.md
+  #       fi
+  #       if [ -f "docs/anti_detection_notes.md" ]; then
+  #         echo "- [反检测说明](../docs/anti_detection_notes.md)" >> _site/index.md
+  #       fi
+  #
+  #   - name: Upload artifact
+  #     uses: actions/upload-pages-artifact@v3
+  #     with:
+  #       path: '_site'
+  #
+  #   - name: Deploy to GitHub Pages
+  #     id: deployment
+  #     uses: actions/deploy-pages@v4
 
