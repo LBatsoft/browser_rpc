@@ -2,6 +2,8 @@
 
 > High-performance browser automation RPC service based on Playwright + gRPC with powerful anti-detection capabilities
 
+[![CI](https://github.com/LBatsoft/browser_rpc/actions/workflows/ci.yml/badge.svg)](https://github.com/LBatsoft/browser_rpc/actions/workflows/ci.yml)
+
 ## ✨ Features
 
 - 🛡️ **Powerful Anti-Detection**: playwright-stealth + custom scripts to bypass common bot detection
@@ -222,9 +224,32 @@ browser_rpc/
 
 MIT License - see [LICENSE](LICENSE) file for details
 
+## 🔄 CI/CD
+
+This project uses GitHub Actions for continuous integration and deployment:
+
+- **CI Workflow** (`.github/workflows/ci.yml`):
+  - Tests on Python 3.9, 3.10, and 3.11
+  - Installs dependencies and Playwright browsers
+  - Compiles Proto files
+  - Verifies imports and code syntax
+  - Tests server startup
+  - Runs code linting (flake8, pylint)
+
+- **CD Workflow** (`.github/workflows/cd.yml`):
+  - Creates release archives for version tags
+  - Builds documentation pages
+
+The CI pipeline runs automatically on every push and pull request to the `master` branch.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+Before submitting, please ensure:
+- Code passes all CI checks
+- Follows the project's code style (configured in `.flake8`)
+- Includes appropriate tests if applicable
 
 ---
 
