@@ -12,7 +12,17 @@ import uuid
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-from playwright_stealth import stealth_async
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    # Fallback for different playwright_stealth versions
+    try:
+        from playwright_stealth.stealth import stealth_async
+    except ImportError:
+        # If stealth_async is not available, use a wrapper
+        async def stealth_async(page):
+            """Fallback stealth function"""
+            pass
 import logging
 
 logger = logging.getLogger(__name__)

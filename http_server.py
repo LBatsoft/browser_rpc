@@ -433,7 +433,7 @@ async def take_screenshot(session_id: str, request: TakeScreenshotRequest):
     """页面截图"""
     try:
         session = get_session(session_id)
-        image_data = await session.take_screenshot(
+        image_data = await session.screenshot(
             selector=request.selector,
             full_page=request.full_page
         )
@@ -459,7 +459,7 @@ async def set_headers(session_id: str, request: SetHeadersRequest):
     """设置请求头"""
     try:
         session = get_session(session_id)
-        await session.set_extra_http_headers(request.headers)
+        await session.set_extra_headers(request.headers)
         
         logger.info(f"设置请求头成功")
         return SetHeadersResponse(
@@ -480,16 +480,36 @@ async def set_cookies(session_id: str, request: SetCookiesRequest):
         session = get_session(session_id)
         
         # 转换为 Playwright Cookie 格式
+        # Playwright 要求每个 Cookie 必须有 url 或 domain+path
         cookies = []
+        # 获取当前页面 URL，如果没有页面则使用默认 URL
+        try:
+            current_url = session.page.url if session.page else None
+        except:
+            current_url = None
+        
+        if not current_url:
+            # 如果没有当前页面，使用第一个 cookie 的 domain 构建 URL
+            if request.cookies and request.cookies[0].domain:
+                domain = request.cookies[0].domain.lstrip('.')
+                current_url = f'https://{domain}'
+            else:
+                current_url = 'https://example.com'
+        
         for cookie in request.cookies:
             cookie_dict = {
                 'name': cookie.name,
                 'value': cookie.value,
             }
+            # Playwright 要求必须有 url 或 domain+path
             if cookie.domain:
                 cookie_dict['domain'] = cookie.domain
-            if cookie.path:
-                cookie_dict['path'] = cookie.path
+                cookie_dict['path'] = cookie.path if cookie.path else '/'
+            else:
+                # 如果没有 domain，使用 url
+                cookie_dict['url'] = current_url
+                if cookie.path:
+                    cookie_dict['path'] = cookie.path
             if cookie.expires:
                 cookie_dict['expires'] = cookie.expires
             if cookie.http_only is not None:
