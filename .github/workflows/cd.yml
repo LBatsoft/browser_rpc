@@ -1,0 +1,78 @@
+name: CD
+
+on:
+  push:
+    branches: [ master ]
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Compile Proto files
+      run: |
+        python -m grpc_tools.protoc -I./proto --python_out=. --grpc_python_out=. ./proto/spider.proto
+
+    - name: Create release archive
+      run: |
+        mkdir -p dist
+        tar -czf dist/browser_rpc-${{ github.ref_name }}.tar.gz \
+          --exclude='.git' \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          --exclude='.github' \
+          --exclude='log' \
+          --exclude='*.png' \
+          --exclude='.env' \
+          .
+
+    - name: Upload release artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: browser_rpc-${{ github.ref_name }}
+        path: dist/browser_rpc-${{ github.ref_name }}.tar.gz
+
+  deploy-docs:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Build documentation
+      run: |
+        echo "# Browser RPC Documentation" > index.md
+        echo "" >> index.md
+        echo "## Project Documentation" >> index.md
+        echo "" >> index.md
+        if [ -f "docs/README_CN.md" ]; then
+          echo "- [中文文档](docs/README_CN.md)" >> index.md
+        fi
+        if [ -f "docs/startup_guide.md" ]; then
+          echo "- [启动指南](docs/startup_guide.md)" >> index.md
+        fi
+        if [ -f "docs/anti_detection_notes.md" ]; then
+          echo "- [反检测说明](docs/anti_detection_notes.md)" >> index.md
+        fi
+
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: '.'
+
