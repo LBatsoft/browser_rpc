@@ -317,10 +317,14 @@ delete Navigator.prototype.webdriver;
                 await self.page.mouse.move(event['x'], event['y'])
                 
             elif event_type == 'mousedown':
+                # 先移动到目标位置，再按下
+                await self.page.mouse.move(event['x'], event['y'])
                 button = event.get('button', 'left')
                 await self.page.mouse.down(button=button)
                 
             elif event_type == 'mouseup':
+                # 先移动到目标位置，再释放
+                await self.page.mouse.move(event['x'], event['y'])
                 button = event.get('button', 'left')
                 await self.page.mouse.up(button=button)
                 
