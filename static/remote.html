@@ -12,7 +12,7 @@
             background-color: #f0f2f5;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         .controls {
@@ -60,17 +60,17 @@
         }
         #viewport {
             position: relative;
-            background: #000;
+            background: #1a1a2e;
             width: fit-content;
             margin: 0 auto;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             user-select: none;
-            min-width: 100px;
-            min-height: 100px;
+            border-radius: 4px;
+            overflow: hidden;
         }
         #screen {
             display: block;
-            max-width: 100%;
+            cursor: default;
         }
         .status {
             margin-left: auto;
@@ -85,6 +85,22 @@
             padding-top: 10px;
             border-top: 1px solid #eee;
         }
+        #debug {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.9);
+            color: #0f0;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 11px;
+            border-radius: 4px;
+            max-width: 400px;
+            display: none;
+            white-space: pre-wrap;
+            z-index: 1000;
+        }
+        #debug.show { display: block; }
     </style>
 </head>
 <body>
@@ -98,6 +114,7 @@
             <div style="width: 1px; height: 20px; background: #ddd; margin: 0 10px;"></div>
             <input type="text" id="taskName" placeholder="任务名称" disabled>
             <button onclick="replay()" id="btnReplay" disabled>重放任务</button>
+            <label style="margin-left: 10px;"><input type="checkbox" id="debugMode" onchange="toggleDebug()"> 调试</label>
             <span class="status" id="status">未连接</span>
             
             <div class="nav-controls">
@@ -107,9 +124,11 @@
         </div>
         
         <div id="viewport">
-            <img id="screen" src="" alt="Remote Screen (Waiting for connection...)" draggable="false">
+            <img id="screen" src="" alt="Remote Screen" draggable="false">
         </div>
     </div>
+    
+    <div id="debug"></div>
 
     <script>
         let ws;
@@ -117,12 +136,22 @@
         let isRecording = false;
         const screen = document.getElementById('screen');
         const statusEl = document.getElementById('status');
+        const debugEl = document.getElementById('debug');
         let frameCount = 0;
-        let currentMetadata = null; // 保存当前帧的元数据
+        let currentMetadata = null;
+        let imageReady = false;
+        let lastMouseMoveTime = 0;
+        const MOUSE_MOVE_THROTTLE = 30;
+
+        function debug(msg) {
+            if (document.getElementById('debugMode').checked) {
+                debugEl.textContent = msg;
+            }
+        }
         
-        // 缩放比例
-        let scaleX = 1;
-        let scaleY = 1;
+        function toggleDebug() {
+            debugEl.classList.toggle('show', document.getElementById('debugMode').checked);
+        }
 
         function updateStatus(msg) {
             statusEl.textContent = msg;
@@ -149,23 +178,19 @@
                 document.getElementById('taskName').disabled = false;
                 document.getElementById('urlInput').disabled = false;
                 document.getElementById('btnNavigate').disabled = false;
-                
-                // 启用交互
                 enableInteraction();
             };
 
-            ws.onclose = () => {
+            ws.onclose = (e) => {
                 isConnected = false;
                 isRecording = false;
-                updateStatus('连接断开');
+                updateStatus(`连接断开 (${e.code})`);
                 document.getElementById('btnConnect').disabled = false;
                 document.getElementById('btnRecord').disabled = true;
                 document.getElementById('btnStop').disabled = true;
                 document.getElementById('btnReplay').disabled = true;
                 document.getElementById('urlInput').disabled = true;
                 document.getElementById('btnNavigate').disabled = true;
-                
-                // 停止交互
                 disableInteraction();
             };
 
@@ -173,26 +198,15 @@
                 const msg = JSON.parse(event.data);
                 
                 if (msg.type === 'frame') {
-                    // 更新画面
-                    const newSrc = 'data:image/jpeg;base64,' + msg.data;
-                    
-                    // 保存元数据用于坐标修正
                     if (msg.metadata) {
                         currentMetadata = msg.metadata;
                     }
                     
-                    // 等待图片加载完成后再更新 scaleX/scaleY
-                    if (screen.src !== newSrc) {
-                        screen.onload = () => {
-                            const naturalWidth = screen.naturalWidth;
-                            const clientWidth = screen.clientWidth;
-                            if (naturalWidth && clientWidth) {
-                                scaleX = naturalWidth / clientWidth;
-                                scaleY = naturalWidth / clientWidth; // 保持比例
-                            }
-                        };
-                        screen.src = newSrc;
-                    }
+                    const newSrc = 'data:image/jpeg;base64,' + msg.data;
+                    screen.onload = () => {
+                        imageReady = true;
+                    };
+                    screen.src = newSrc;
                     frameCount++;
                     
                 } else if (msg.type === 'status') {
@@ -215,29 +229,19 @@
             try {
                 const response = await fetch(`/api/sessions/${sessionId}/navigate`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url: url })
                 });
                 const result = await response.json();
-                if (result.success) {
-                    updateStatus('导航成功');
-                } else {
-                    updateStatus('导航失败: ' + result.message);
-                }
+                updateStatus(result.success ? '导航成功' : '导航失败: ' + result.message);
             } catch (e) {
                 updateStatus('导航请求错误: ' + e.message);
             }
         }
 
-
         function startRecord() {
             if (!ws) return;
-            ws.send(JSON.stringify({
-                type: 'control',
-                command: 'start_record'
-            }));
+            ws.send(JSON.stringify({ type: 'control', command: 'start_record' }));
             isRecording = true;
             document.getElementById('btnRecord').disabled = true;
             document.getElementById('btnStop').disabled = false;
@@ -267,110 +271,125 @@
                 alert('请输入任务名称');
                 return;
             }
-            ws.send(JSON.stringify({
-                type: 'control',
-                command: 'replay',
-                taskName: taskName
-            }));
+            ws.send(JSON.stringify({ type: 'control', command: 'replay', taskName: taskName }));
         }
 
         // --- 交互事件处理 ---
 
         function sendInput(event) {
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({
-                type: 'input',
-                event: event
-            }));
+            ws.send(JSON.stringify({ type: 'input', event: event }));
         }
 
-        function handleMouseEvent(e) {
-            if (!currentMetadata || !currentMetadata.deviceWidth) {
-                // 如果没有 metadata，跳过
-                return;
+        function calculateCoordinates(e) {
+            if (!currentMetadata || !imageReady || !screen.naturalWidth) {
+                return null;
             }
             
-            // 计算相对于图片的坐标
             const rect = screen.getBoundingClientRect();
-            
-            // 鼠标相对于显示图片的位置（像素）
             const imgX = e.clientX - rect.left;
             const imgY = e.clientY - rect.top;
             
-            // 转换到图片原始尺寸的坐标
-            // (因为图片可能被缩放显示)
-            const imgScale = screen.naturalWidth / screen.clientWidth;
-            const imgOrigX = imgX * imgScale;
-            const imgOrigY = imgY * imgScale;
+            if (imgX < 0 || imgY < 0 || imgX > rect.width || imgY > rect.height) {
+                return null;
+            }
             
-            // 转换到浏览器 viewport 的实际坐标
-            // CDP screencast 的图片尺寸可能与 viewport 不同
-            const viewportScale = currentMetadata.deviceWidth / screen.naturalWidth;
-            const x = imgOrigX * viewportScale;
-            const y = imgOrigY * viewportScale * (currentMetadata.deviceHeight / currentMetadata.deviceWidth) * (screen.naturalWidth / screen.naturalHeight);
+            // 计算相对位置 (0-1)
+            const relX = imgX / rect.width;
+            const relY = imgY / rect.height;
             
-            // 简化版：直接从显示位置映射到 viewport
-            const finalX = imgX * (currentMetadata.deviceWidth / screen.clientWidth);
-            const finalY = imgY * (currentMetadata.deviceHeight / screen.clientHeight);
-
-            if (e.type === 'mousemove') {
-                sendInput({ type: 'mousemove', x: finalX, y: finalY });
-            } else if (e.type === 'mousedown') {
-                sendInput({ type: 'mousedown', x: finalX, y: finalY, button: ['left', 'middle', 'right'][e.button] });
-            } else if (e.type === 'mouseup') {
-                sendInput({ type: 'mouseup', x: finalX, y: finalY, button: ['left', 'middle', 'right'][e.button] });
-            } 
-            // 移除 click 事件处理，避免与 mousedown/mouseup 重复导致操作冲突
+            // 映射到 viewport 坐标
+            const x = relX * currentMetadata.deviceWidth;
+            const y = relY * currentMetadata.deviceHeight;
+            
+            debug(`鼠标位置: (${e.clientX}, ${e.clientY})
+图片内位置: (${imgX.toFixed(1)}, ${imgY.toFixed(1)})
+图片显示尺寸: ${rect.width.toFixed(0)} x ${rect.height.toFixed(0)}
+图片原始尺寸: ${screen.naturalWidth} x ${screen.naturalHeight}
+viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight}
+相对位置: (${(relX*100).toFixed(1)}%, ${(relY*100).toFixed(1)}%)
+发送坐标: (${x.toFixed(0)}, ${y.toFixed(0)})`);
+            
+            return { x, y };
         }
 
-        function handleWheelEvent(e) {
-            e.preventDefault();
-            sendInput({ type: 'scroll', deltaX: e.deltaX, deltaY: e.deltaY });
-        }
-
-        function handleKeyEvent(e) {
-            // 避免重复发送
-            if (e.repeat) return;
+        function handleMouseMove(e) {
+            const now = Date.now();
+            if (now - lastMouseMoveTime < MOUSE_MOVE_THROTTLE) return;
+            lastMouseMoveTime = now;
             
-            const keyMap = {
-                'Enter': 'Enter',
-                'Backspace': 'Backspace',
-                'Tab': 'Tab',
-                'Escape': 'Escape',
-                'ArrowUp': 'ArrowUp',
-                'ArrowDown': 'ArrowDown',
-                'ArrowLeft': 'ArrowLeft',
-                'ArrowRight': 'ArrowRight',
-                // 添加更多键位映射...
-            };
-            
-            const key = keyMap[e.key] || e.key;
-            
-            if (e.type === 'keydown') {
-                sendInput({ type: 'keydown', key: key });
-            } else if (e.type === 'keyup') {
-                sendInput({ type: 'keyup', key: key });
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                sendInput({ type: 'mousemove', x: coords.x, y: coords.y });
             }
         }
 
+        function handleMouseDown(e) {
+            e.preventDefault();
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                const button = ['left', 'middle', 'right'][e.button] || 'left';
+                sendInput({ type: 'mousedown', x: coords.x, y: coords.y, button: button });
+            }
+        }
+
+        function handleMouseUp(e) {
+            e.preventDefault();
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                const button = ['left', 'middle', 'right'][e.button] || 'left';
+                sendInput({ type: 'mouseup', x: coords.x, y: coords.y, button: button });
+            }
+        }
+
+        function handleWheel(e) {
+            e.preventDefault();
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                sendInput({ 
+                    type: 'scroll', 
+                    x: coords.x, 
+                    y: coords.y,
+                    deltaX: e.deltaX, 
+                    deltaY: e.deltaY 
+                });
+            }
+        }
+
+        function handleKeyDown(e) {
+            if (e.repeat) return;
+            if (['Tab', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter'].includes(e.key)) {
+                e.preventDefault();
+            }
+            sendInput({ type: 'keydown', key: e.key });
+        }
+
+        function handleKeyUp(e) {
+            sendInput({ type: 'keyup', key: e.key });
+        }
+
+        function handleContextMenu(e) {
+            e.preventDefault();
+        }
+
         function enableInteraction() {
-            screen.addEventListener('mousemove', handleMouseEvent);
-            screen.addEventListener('mousedown', handleMouseEvent);
-            screen.addEventListener('mouseup', handleMouseEvent);
-            // 移除 click 监听器，使用 mousedown/mouseup 组合更精准
-            screen.addEventListener('wheel', handleWheelEvent);
-            document.addEventListener('keydown', handleKeyEvent);
-            document.addEventListener('keyup', handleKeyEvent);
+            screen.addEventListener('mousemove', handleMouseMove);
+            screen.addEventListener('mousedown', handleMouseDown);
+            screen.addEventListener('mouseup', handleMouseUp);
+            screen.addEventListener('wheel', handleWheel, { passive: false });
+            screen.addEventListener('contextmenu', handleContextMenu);
+            document.addEventListener('keydown', handleKeyDown);
+            document.addEventListener('keyup', handleKeyUp);
         }
 
         function disableInteraction() {
-            screen.removeEventListener('mousemove', handleMouseEvent);
-            screen.removeEventListener('mousedown', handleMouseEvent);
-            screen.removeEventListener('mouseup', handleMouseEvent);
-            // 移除 click 监听器
-            screen.removeEventListener('wheel', handleWheelEvent);
-            document.removeEventListener('keydown', handleKeyEvent);
-            document.removeEventListener('keyup', handleKeyEvent);
+            screen.removeEventListener('mousemove', handleMouseMove);
+            screen.removeEventListener('mousedown', handleMouseDown);
+            screen.removeEventListener('mouseup', handleMouseUp);
+            screen.removeEventListener('wheel', handleWheel);
+            screen.removeEventListener('contextmenu', handleContextMenu);
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('keyup', handleKeyUp);
         }
     </script>
 </body>

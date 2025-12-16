@@ -306,48 +306,120 @@ delete Navigator.prototype.webdriver;
             logger.error(f"Stop screencast failed: {e}")
 
     async def handle_input_event(self, event: Dict[str, Any]):
-        """处理输入事件"""
+        """处理输入事件 - 使用 CDP 原生方法"""
         if not self.page:
             return
 
         try:
             event_type = event.get('type')
+            x = event.get('x', 0)
+            y = event.get('y', 0)
+            
+            # 确保 CDP session 存在
+            if not self.cdp_session:
+                self.cdp_session = await self.context.new_cdp_session(self.page)
             
             if event_type == 'mousemove':
-                await self.page.mouse.move(event['x'], event['y'])
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseMoved",
+                    "x": x,
+                    "y": y
+                })
                 
             elif event_type == 'mousedown':
-                # 先移动到目标位置，再按下
-                await self.page.mouse.move(event['x'], event['y'])
                 button = event.get('button', 'left')
-                await self.page.mouse.down(button=button)
+                cdp_button = {'left': 'left', 'middle': 'middle', 'right': 'right'}.get(button, 'left')
+                buttons = {'left': 1, 'middle': 4, 'right': 2}.get(button, 1)
+                
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": buttons,
+                    "clickCount": 1
+                })
                 
             elif event_type == 'mouseup':
-                # 先移动到目标位置，再释放
-                await self.page.mouse.move(event['x'], event['y'])
                 button = event.get('button', 'left')
-                await self.page.mouse.up(button=button)
+                cdp_button = {'left': 'left', 'middle': 'middle', 'right': 'right'}.get(button, 'left')
+                
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": 0,
+                    "clickCount": 1
+                })
                 
             elif event_type == 'click':
-                await self.page.mouse.click(event['x'], event['y'], button=event.get('button', 'left'))
+                button = event.get('button', 'left')
+                cdp_button = {'left': 'left', 'middle': 'middle', 'right': 'right'}.get(button, 'left')
+                buttons = {'left': 1, 'middle': 4, 'right': 2}.get(button, 1)
+                
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseMoved",
+                    "x": x,
+                    "y": y
+                })
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": buttons,
+                    "clickCount": 1
+                })
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": 0,
+                    "clickCount": 1
+                })
                 
             elif event_type == 'keydown':
-                key = event.get('key')
+                key = event.get('key', '')
                 if key:
-                    await self.page.keyboard.down(key)
+                    await self.cdp_session.send("Input.dispatchKeyEvent", {
+                        "type": "keyDown",
+                        "key": key,
+                        "text": key if len(key) == 1 else ""
+                    })
                 
             elif event_type == 'keyup':
-                key = event.get('key')
+                key = event.get('key', '')
                 if key:
-                    await self.page.keyboard.up(key)
+                    await self.cdp_session.send("Input.dispatchKeyEvent", {
+                        "type": "keyUp",
+                        "key": key
+                    })
                 
             elif event_type == 'keypress':
-                key = event.get('key')
+                key = event.get('key', '')
                 if key:
-                    await self.page.keyboard.press(key)
+                    await self.cdp_session.send("Input.dispatchKeyEvent", {
+                        "type": "keyDown",
+                        "key": key,
+                        "text": key if len(key) == 1 else ""
+                    })
+                    await self.cdp_session.send("Input.dispatchKeyEvent", {
+                        "type": "keyUp",
+                        "key": key
+                    })
                 
-            elif event_type == 'scroll': # wheel
-                await self.page.mouse.wheel(event.get('deltaX', 0), event.get('deltaY', 0))
+            elif event_type == 'scroll':
+                deltaX = event.get('deltaX', 0)
+                deltaY = event.get('deltaY', 0)
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseWheel",
+                    "x": x,
+                    "y": y,
+                    "deltaX": deltaX,
+                    "deltaY": deltaY
+                })
                 
             self.last_activity = time.time()
             
