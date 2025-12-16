@@ -174,20 +174,27 @@
                 
                 if (msg.type === 'frame') {
                     // 更新画面
-                    screen.src = 'data:image/jpeg;base64,' + msg.data;
-                    frameCount++;
+                    const newSrc = 'data:image/jpeg;base64,' + msg.data;
                     
                     // 保存元数据用于坐标修正
                     if (msg.metadata) {
                         currentMetadata = msg.metadata;
-                        // 这里简单处理，假设图片显示尺寸与实际尺寸一致或按比例缩放
-                        const naturalWidth = screen.naturalWidth;
-                        const clientWidth = screen.clientWidth;
-                        if (naturalWidth && clientWidth) {
-                            scaleX = naturalWidth / clientWidth;
-                            scaleY = naturalWidth / clientWidth; // 保持比例
-                        }
                     }
+                    
+                    // 等待图片加载完成后再更新 scaleX/scaleY
+                    if (screen.src !== newSrc) {
+                        screen.onload = () => {
+                            const naturalWidth = screen.naturalWidth;
+                            const clientWidth = screen.clientWidth;
+                            if (naturalWidth && clientWidth) {
+                                scaleX = naturalWidth / clientWidth;
+                                scaleY = naturalWidth / clientWidth; // 保持比例
+                            }
+                        };
+                        screen.src = newSrc;
+                    }
+                    frameCount++;
+                    
                 } else if (msg.type === 'status') {
                     updateStatus(msg.message);
                     if (msg.taskName) {
@@ -282,7 +289,11 @@
             const rect = screen.getBoundingClientRect();
             
             // 图片显示的比例
-            const displayScale = screen.naturalWidth / screen.clientWidth;
+            // 防止 naturalWidth 为 0 导致坐标计算错误
+            let displayScale = 1;
+            if (screen.naturalWidth && screen.clientWidth) {
+                displayScale = screen.naturalWidth / screen.clientWidth;
+            }
             
             // 原始图像上的坐标
             let x = (e.clientX - rect.left) * displayScale;
@@ -301,7 +312,7 @@
             } else if (e.type === 'mouseup') {
                 sendInput({ type: 'mouseup', x, y, button: ['left', 'middle', 'right'][e.button] });
             } 
-            // 移除 click 事件，避免与 mousedown/mouseup 重复导致操作冲突
+            // 移除 click 事件处理，避免与 mousedown/mouseup 重复导致操作冲突
         }
 
         function handleWheelEvent(e) {
@@ -338,7 +349,7 @@
             screen.addEventListener('mousemove', handleMouseEvent);
             screen.addEventListener('mousedown', handleMouseEvent);
             screen.addEventListener('mouseup', handleMouseEvent);
-            screen.addEventListener('click', handleMouseEvent);
+            // 移除 click 监听器，使用 mousedown/mouseup 组合更精准
             screen.addEventListener('wheel', handleWheelEvent);
             document.addEventListener('keydown', handleKeyEvent);
             document.addEventListener('keyup', handleKeyEvent);
@@ -348,7 +359,7 @@
             screen.removeEventListener('mousemove', handleMouseEvent);
             screen.removeEventListener('mousedown', handleMouseEvent);
             screen.removeEventListener('mouseup', handleMouseEvent);
-            screen.removeEventListener('click', handleMouseEvent);
+            // 移除 click 监听器
             screen.removeEventListener('wheel', handleWheelEvent);
             document.removeEventListener('keydown', handleKeyEvent);
             document.removeEventListener('keyup', handleKeyEvent);
