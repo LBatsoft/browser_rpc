@@ -285,32 +285,40 @@
         }
 
         function handleMouseEvent(e) {
+            if (!currentMetadata || !currentMetadata.deviceWidth) {
+                // 如果没有 metadata，跳过
+                return;
+            }
+            
             // 计算相对于图片的坐标
             const rect = screen.getBoundingClientRect();
             
-            // 图片显示的比例
-            // 防止 naturalWidth 为 0 导致坐标计算错误
-            let displayScale = 1;
-            if (screen.naturalWidth && screen.clientWidth) {
-                displayScale = screen.naturalWidth / screen.clientWidth;
-            }
+            // 鼠标相对于显示图片的位置（像素）
+            const imgX = e.clientX - rect.left;
+            const imgY = e.clientY - rect.top;
             
-            // 原始图像上的坐标
-            let x = (e.clientX - rect.left) * displayScale;
-            let y = (e.clientY - rect.top) * displayScale;
-
-            // 根据 deviceScaleFactor 修正坐标 (解决 Retina 屏偏移问题)
-            if (currentMetadata && currentMetadata.deviceScaleFactor) {
-                x = x / currentMetadata.deviceScaleFactor;
-                y = y / currentMetadata.deviceScaleFactor;
-            }
+            // 转换到图片原始尺寸的坐标
+            // (因为图片可能被缩放显示)
+            const imgScale = screen.naturalWidth / screen.clientWidth;
+            const imgOrigX = imgX * imgScale;
+            const imgOrigY = imgY * imgScale;
+            
+            // 转换到浏览器 viewport 的实际坐标
+            // CDP screencast 的图片尺寸可能与 viewport 不同
+            const viewportScale = currentMetadata.deviceWidth / screen.naturalWidth;
+            const x = imgOrigX * viewportScale;
+            const y = imgOrigY * viewportScale * (currentMetadata.deviceHeight / currentMetadata.deviceWidth) * (screen.naturalWidth / screen.naturalHeight);
+            
+            // 简化版：直接从显示位置映射到 viewport
+            const finalX = imgX * (currentMetadata.deviceWidth / screen.clientWidth);
+            const finalY = imgY * (currentMetadata.deviceHeight / screen.clientHeight);
 
             if (e.type === 'mousemove') {
-                sendInput({ type: 'mousemove', x, y });
+                sendInput({ type: 'mousemove', x: finalX, y: finalY });
             } else if (e.type === 'mousedown') {
-                sendInput({ type: 'mousedown', x, y, button: ['left', 'middle', 'right'][e.button] });
+                sendInput({ type: 'mousedown', x: finalX, y: finalY, button: ['left', 'middle', 'right'][e.button] });
             } else if (e.type === 'mouseup') {
-                sendInput({ type: 'mouseup', x, y, button: ['left', 'middle', 'right'][e.button] });
+                sendInput({ type: 'mouseup', x: finalX, y: finalY, button: ['left', 'middle', 'right'][e.button] });
             } 
             // 移除 click 事件处理，避免与 mousedown/mouseup 重复导致操作冲突
         }
