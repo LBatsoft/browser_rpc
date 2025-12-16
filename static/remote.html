@@ -118,6 +118,7 @@
         const screen = document.getElementById('screen');
         const statusEl = document.getElementById('status');
         let frameCount = 0;
+        let currentMetadata = null; // 保存当前帧的元数据
         
         // 缩放比例
         let scaleX = 1;
@@ -175,14 +176,11 @@
                     // 更新画面
                     screen.src = 'data:image/jpeg;base64,' + msg.data;
                     frameCount++;
-                    if (frameCount % 60 === 0) {
-                        // updateStatus(`已连接 (Frames: ${frameCount})`);
-                    }
                     
-                    // 更新缩放比例 (如果 metadata 包含尺寸信息)
+                    // 保存元数据用于坐标修正
                     if (msg.metadata) {
+                        currentMetadata = msg.metadata;
                         // 这里简单处理，假设图片显示尺寸与实际尺寸一致或按比例缩放
-                        // 实际场景可能需要更复杂的计算
                         const naturalWidth = screen.naturalWidth;
                         const clientWidth = screen.clientWidth;
                         if (naturalWidth && clientWidth) {
@@ -282,12 +280,19 @@
         function handleMouseEvent(e) {
             // 计算相对于图片的坐标
             const rect = screen.getBoundingClientRect();
-            // 真实页面坐标 = (点击位置 - 图片左上角) * (图片自然宽度 / 图片显示宽度)
-            // 注意: CDP screencast 的 scale 可能会有影响，这里简化处理
-            const scale = screen.naturalWidth / screen.clientWidth;
             
-            const x = (e.clientX - rect.left) * scale;
-            const y = (e.clientY - rect.top) * scale;
+            // 图片显示的比例
+            const displayScale = screen.naturalWidth / screen.clientWidth;
+            
+            // 原始图像上的坐标
+            let x = (e.clientX - rect.left) * displayScale;
+            let y = (e.clientY - rect.top) * displayScale;
+
+            // 根据 deviceScaleFactor 修正坐标 (解决 Retina 屏偏移问题)
+            if (currentMetadata && currentMetadata.deviceScaleFactor) {
+                x = x / currentMetadata.deviceScaleFactor;
+                y = y / currentMetadata.deviceScaleFactor;
+            }
 
             if (e.type === 'mousemove') {
                 sendInput({ type: 'mousemove', x, y });
@@ -295,9 +300,8 @@
                 sendInput({ type: 'mousedown', x, y, button: ['left', 'middle', 'right'][e.button] });
             } else if (e.type === 'mouseup') {
                 sendInput({ type: 'mouseup', x, y, button: ['left', 'middle', 'right'][e.button] });
-            } else if (e.type === 'click') {
-                sendInput({ type: 'click', x, y, button: ['left', 'middle', 'right'][e.button] });
-            }
+            } 
+            // 移除 click 事件，避免与 mousedown/mouseup 重复导致操作冲突
         }
 
         function handleWheelEvent(e) {
