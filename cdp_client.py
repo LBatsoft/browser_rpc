@@ -83,7 +83,13 @@ class NetworkInterceptor:
                             'body': body.decode('utf-8', errors='ignore')
                         }
                     except Exception as e:
-                        logger.warning(f"获取响应体失败: {e}")
+                        error_msg = str(e)
+                        if "No data found" in error_msg or "Target closed" in error_msg:
+                            # 忽略预期内的错误，使用 debug 级别
+                            logger.debug(f"获取响应体失败 (忽略): {error_msg}")
+                        else:
+                            logger.warning(f"获取响应体失败: {error_msg}")
+                            
                         req['response'] = {
                             'status_code': response.status,
                             'headers': response.headers,
