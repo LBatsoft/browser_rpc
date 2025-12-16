@@ -10,11 +10,14 @@ import logging
 import sys
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cdp_client import BrowserPool
+import time
+import os
 
 # 配置日志
 import os
@@ -36,6 +39,11 @@ app = FastAPI(
     description="Browser automation service via HTTP REST API",
     version="1.0.0"
 )
+
+# 挂载静态文件
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # 全局浏览器池
 browser_pool: Optional[BrowserPool] = None
@@ -566,6 +574,111 @@ async def get_cookies(session_id: str, url: Optional[str] = None):
     except Exception as e:
         logger.error(f"获取 Cookie 失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+# 简单的任务存储 (内存中)
+# 实际生产环境应该使用数据库
+recorded_tasks: Dict[str, List[Dict]] = {}
+
+@app.websocket("/ws/sessions/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """WebSocket 远程控制接口"""
+    await websocket.accept()
+    
+    try:
+        # 获取会话 (不使用 get_session 包装器，避免 HTTPException)
+        session = browser_pool.get_session(session_id)
+        if not session:
+            await websocket.close(code=4004, reason="Session not found")
+            return
+
+        # 录制状态
+        is_recording = False
+        current_recording = []
+        
+        # 定义发送帧的回调
+        async def send_frame(data, metadata):
+            try:
+                await websocket.send_json({
+                    "type": "frame",
+                    "data": data,
+                    "metadata": metadata
+                })
+            except Exception as e:
+                logger.error(f"WebSocket send frame error: {e}")
+                # 连接断开时可能会报错，这里暂时忽略
+
+        try:
+            # 开启投射
+            await session.start_screencast(send_frame)
+            logger.info(f"WebSocket connected for session {session_id}")
+            
+            while True:
+                # 接收前端指令
+                data = await websocket.receive_json()
+                msg_type = data.get('type')
+                
+                if msg_type == 'input':
+                    # 执行操作
+                    event = data.get('event', {})
+                    await session.handle_input_event(event)
+                    
+                    # 录制
+                    if is_recording:
+                        event_record = event.copy()
+                        event_record['timestamp'] = time.time()
+                        current_recording.append(event_record)
+                        
+                elif msg_type == 'control':
+                    cmd = data.get('command')
+                    if cmd == 'start_record':
+                        is_recording = True
+                        current_recording = []
+                        logger.info(f"Session {session_id} started recording")
+                        await websocket.send_json({"type": "status", "message": "Recording started"})
+                        
+                    elif cmd == 'stop_record':
+                        is_recording = False
+                        task_name = data.get('taskName', f"task_{int(time.time())}")
+                        recorded_tasks[task_name] = current_recording
+                        logger.info(f"Session {session_id} stopped recording, saved as {task_name}")
+                        await websocket.send_json({
+                            "type": "status", 
+                            "message": f"Recording saved as {task_name}",
+                            "taskName": task_name,
+                            "eventCount": len(current_recording)
+                        })
+                        
+                    elif cmd == 'replay':
+                        task_name = data.get('taskName')
+                        if task_name in recorded_tasks:
+                            logger.info(f"Session {session_id} replaying task {task_name}")
+                            await websocket.send_json({"type": "status", "message": f"Replaying {task_name}..."})
+                            # 异步执行重放，避免阻塞 WebSocket 接收循环
+                            asyncio.create_task(session.replay_events(recorded_tasks[task_name]))
+                        else:
+                            await websocket.send_json({"type": "error", "message": f"Task {task_name} not found"})
+
+                elif msg_type == 'ping':
+                    await websocket.send_json({"type": "pong"})
+
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected for session {session_id}")
+        except Exception as e:
+            logger.error(f"WebSocket loop error: {e}")
+        finally:
+            # 停止投射
+            try:
+                await session.stop_screencast()
+            except:
+                pass
+
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {e}")
+        try:
+            await websocket.close(code=1011)
+        except:
+            pass
 
 
 if __name__ == "__main__":

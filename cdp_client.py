@@ -107,6 +107,8 @@ class BrowserSession:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.playwright = None
+        self.cdp_session = None
+        self.screencast_listener = None
         self.network_interceptor = NetworkInterceptor()
         self.custom_headers: Dict[str, str] = {}
         self.created_at = time.time()
@@ -236,6 +238,138 @@ delete Navigator.prototype.webdriver;
         except Exception as e:
             logger.error(f"脚本执行失败: {e}")
             raise
+            
+    async def start_screencast(self, callback):
+        """开启屏幕投射"""
+        if not self.page:
+            raise RuntimeError("浏览器会话未初始化")
+        
+        try:
+            # 建立 CDP 会话
+            if not self.cdp_session:
+                self.cdp_session = await self.context.new_cdp_session(self.page)
+            
+            # 清理旧的监听器
+            if self.screencast_listener:
+                self.cdp_session.remove_listener("Page.screencastFrame", self.screencast_listener)
+                self.screencast_listener = None
+
+            # 监听 screencast 帧
+            async def on_screencast_frame(frame):
+                try:
+                    # frame 包含 data (base64), sessionId, metadata
+                    # 调用回调函数发送给 WebSocket
+                    if callback:
+                        await callback(frame['data'], frame['metadata'])
+                    
+                    # 必须确认帧，否则流会停止
+                    if self.cdp_session:
+                        await self.cdp_session.send("Page.screencastFrameAck", {"sessionId": frame['sessionId']})
+                except Exception as e:
+                    logger.error(f"Screencast frame error: {e}")
+
+            # 保存并添加新监听器
+            self.screencast_listener = on_screencast_frame
+            self.cdp_session.on("Page.screencastFrame", self.screencast_listener)
+            
+            # 开启投射
+            await self.cdp_session.send("Page.startScreencast", {
+                "format": "jpeg",
+                "quality": 80,
+                "everyNthFrame": 1
+            })
+            logger.info(f"Screencast started for session {self.session_id}")
+            
+        except Exception as e:
+            logger.error(f"Start screencast failed: {e}")
+            raise
+
+    async def stop_screencast(self):
+        """停止屏幕投射"""
+        try:
+            if self.cdp_session:
+                await self.cdp_session.send("Page.stopScreencast")
+                
+                # 移除监听器
+                if self.screencast_listener:
+                    self.cdp_session.remove_listener("Page.screencastFrame", self.screencast_listener)
+                    self.screencast_listener = None
+                    
+            logger.info(f"Screencast stopped for session {self.session_id}")
+        except Exception as e:
+            logger.error(f"Stop screencast failed: {e}")
+
+    async def handle_input_event(self, event: Dict[str, Any]):
+        """处理输入事件"""
+        if not self.page:
+            return
+
+        try:
+            event_type = event.get('type')
+            
+            if event_type == 'mousemove':
+                await self.page.mouse.move(event['x'], event['y'])
+                
+            elif event_type == 'mousedown':
+                button = event.get('button', 'left')
+                await self.page.mouse.down(button=button)
+                
+            elif event_type == 'mouseup':
+                button = event.get('button', 'left')
+                await self.page.mouse.up(button=button)
+                
+            elif event_type == 'click':
+                await self.page.mouse.click(event['x'], event['y'], button=event.get('button', 'left'))
+                
+            elif event_type == 'keydown':
+                key = event.get('key')
+                if key:
+                    await self.page.keyboard.down(key)
+                
+            elif event_type == 'keyup':
+                key = event.get('key')
+                if key:
+                    await self.page.keyboard.up(key)
+                
+            elif event_type == 'keypress':
+                key = event.get('key')
+                if key:
+                    await self.page.keyboard.press(key)
+                
+            elif event_type == 'scroll': # wheel
+                await self.page.mouse.wheel(event.get('deltaX', 0), event.get('deltaY', 0))
+                
+            self.last_activity = time.time()
+            
+        except Exception as e:
+            logger.error(f"Handle input event failed: {e}, Event: {event}")
+
+    async def replay_events(self, events: List[dict]):
+        """重放事件序列"""
+        if not events: return
+        
+        logger.info(f"开始重放任务，共 {len(events)} 个事件")
+        start_time = events[0].get('timestamp', 0)
+        
+        # 为了保证重放的准确性，使用相对时间
+        for i, event in enumerate(events):
+            try:
+                # 计算需要等待的时间
+                if i > 0:
+                    prev_time = events[i-1].get('timestamp', 0)
+                    curr_time = event.get('timestamp', 0)
+                    delay = curr_time - prev_time
+                    # 如果间隔太大（比如超过5秒），可能是在思考，可以适当缩短或者按原样等待
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                
+                # 执行操作
+                await self.handle_input_event(event)
+            except Exception as e:
+                logger.error(f"重放事件失败: {e}, index: {i}")
+        
+        logger.info("任务重放完成")
+
     
     async def get_content(self) -> str:
         """获取页面内容"""
