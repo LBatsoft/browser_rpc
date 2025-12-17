@@ -26,7 +26,8 @@ class BrowserHTTPClient:
             base_url: HTTP 服务器地址，例如 'http://localhost:8000'
         """
         self.base_url = base_url.rstrip('/')
-        self.client = httpx.AsyncClient(timeout=60.0)
+        # Disable SSL verification for local development/sandbox compatibility
+        self.client = httpx.AsyncClient(timeout=60.0, verify=False)
         self.session_id: Optional[str] = None
     
     async def close(self):

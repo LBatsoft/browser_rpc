@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cdp_client import BrowserPool
+from core.registry import NodeRegistry
 import time
 import os
 
@@ -47,6 +48,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # 全局浏览器池
 browser_pool: Optional[BrowserPool] = None
+node_registry: Optional[NodeRegistry] = None
 
 
 # Pydantic 模型定义
@@ -207,21 +209,33 @@ def get_session(session_id: str):
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时初始化浏览器池"""
-    global browser_pool
+    """应用启动时初始化浏览器池和注册节点"""
+    global browser_pool, node_registry
     from config import get_config
     config = get_config()
     browser_pool = BrowserPool(config.MAX_SESSIONS, config.SESSION_TIMEOUT)
     logger.info(f"HTTP 服务器启动完成 (最大会话数: {config.MAX_SESSIONS})")
+    
+    # 初始化节点注册
+    if config.REDIS_URL:
+        try:
+            node_registry = NodeRegistry(config.REDIS_URL)
+            await node_registry.register_node()
+            logger.info("节点注册成功")
+        except Exception as e:
+            logger.error(f"节点注册失败: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """应用关闭时清理浏览器池"""
-    global browser_pool
+    """应用关闭时清理"""
+    global browser_pool, node_registry
     if browser_pool:
-        await browser_pool.cleanup()
+        await browser_pool.close_all()
         logger.info("浏览器池已清理")
+    
+    if node_registry:
+        await node_registry.close()
 
 
 @app.get("/")
@@ -250,6 +264,12 @@ async def create_session(request: CreateSessionRequest):
             height=request.height
         )
         
+        # 更新负载信息
+        if node_registry:
+            await node_registry.update_load(len(browser_pool.sessions))
+            # 注册会话路由
+            await node_registry.register_session(session_id, node_registry.node_id)
+        
         logger.info(f"创建会话成功: {session_id}")
         return CreateSessionResponse(
             session_id=session_id,
@@ -266,6 +286,11 @@ async def close_session(session_id: str):
     """关闭浏览器会话"""
     try:
         success = await browser_pool.close_session(session_id)
+        
+        # 更新负载信息
+        if node_registry:
+            await node_registry.update_load(len(browser_pool.sessions))
+            
         if success:
             logger.info(f"关闭会话成功: {session_id}")
             return CloseSessionResponse(
@@ -599,6 +624,21 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         # 定义发送帧的回调
         async def send_frame(data, metadata):
             try:
+                # 顺便检查是否有新标签页，如果有，推送列表
+                # 这是一个简化的做法，理想情况是基于事件
+                # 为了性能，每 60 帧 (约1秒) 检查一次
+                nonlocal frame_counter
+                frame_counter += 1
+                if frame_counter % 60 == 0:
+                    pages = await session.get_pages()
+                    if pages:
+                        active_id = getattr(session.page, '_guid', None)
+                        await websocket.send_json({
+                            "type": "tabs",
+                            "tabs": pages,
+                            "activeId": active_id
+                        })
+
                 await websocket.send_json({
                     "type": "frame",
                     "data": data,
@@ -609,9 +649,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 # 连接断开时可能会报错，这里暂时忽略
 
         try:
+            frame_counter = 0
             # 开启投射
             await session.start_screencast(send_frame)
             logger.info(f"WebSocket connected for session {session_id}")
+            
+            # 初始发送一次标签页列表
+            pages = await session.get_pages()
+            active_id = getattr(session.page, '_guid', None)
+            await websocket.send_json({
+                "type": "tabs",
+                "tabs": pages,
+                "activeId": active_id
+            })
             
             while True:
                 # 接收前端指令
@@ -658,9 +708,26 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             asyncio.create_task(session.replay_events(recorded_tasks[task_name]))
                         else:
                             await websocket.send_json({"type": "error", "message": f"Task {task_name} not found"})
+                    
+                    elif cmd == 'switch_tab':
+                        tab_id = data.get('tabId')
+                        if tab_id:
+                            await session.switch_to_page(tab_id)
+                            # 切换后发送新的标签页列表
+                            pages = await session.get_pages()
+                            active_id = getattr(session.page, '_guid', None)
+                            await websocket.send_json({
+                                "type": "tabs",
+                                "tabs": pages,
+                                "activeId": active_id
+                            })
 
                 elif msg_type == 'ping':
                     await websocket.send_json({"type": "pong"})
+            
+            # 定时推送标签页信息 (简单的轮询机制，或者在 screencast 帧中附带)
+            # 在这里我们无法轻松插入循环，只能依赖前端交互或事件触发
+            # 改进：修改 _on_new_page 回调机制，允许传入 callback
 
         except WebSocketDisconnect:
             logger.info(f"WebSocket disconnected for session {session_id}")

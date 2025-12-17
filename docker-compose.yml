@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # 网关 (Gateway) - 统一入口
+  gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - browser-node-1
+    command: python gateway.py
+
+  # 浏览器节点 (Worker)
+  browser-node-1:
+    build: .
+    environment:
+      - HTTP_PORT=8001
+      - MAX_SESSIONS=5
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./log:/app/log
+    depends_on:
+      - redis
+    command: python http_server.py
+
+  # 浏览器节点 2 (Worker) - 模拟扩展
+  browser-node-2:
+    build: .
+    environment:
+      - HTTP_PORT=8002
+      - MAX_SESSIONS=5
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./log:/app/log
+    depends_on:
+      - redis
+    command: python http_server.py
+
+networks:
+  default:
+    driver: bridge
+

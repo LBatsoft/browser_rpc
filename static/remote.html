@@ -62,6 +62,7 @@
             position: relative;
             background: #1a1a2e;
             width: fit-content;
+            max-width: 100%;
             margin: 0 auto;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             user-select: none;
@@ -71,11 +72,34 @@
         #screen {
             display: block;
             cursor: default;
+            max-width: 100%;
+            height: auto;
         }
         .status {
             margin-left: auto;
             color: #666;
             font-size: 14px;
+        }
+        .tabs {
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+        .tab-item {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            background: #f5f5f5;
+            font-size: 12px;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tab-item.active {
+            background: #fff;
+            border-bottom-color: #fff;
+            font-weight: bold;
         }
         .nav-controls {
             display: flex;
@@ -121,6 +145,10 @@
                 <input type="text" id="urlInput" placeholder="输入 URL (例如 https://www.google.com)" style="flex-grow: 1;" disabled>
                 <button onclick="navigate()" id="btnNavigate" disabled>导航</button>
             </div>
+            
+            <div id="tabList" class="tabs" style="margin-top: 10px; display: flex; gap: 5px; overflow-x: auto;">
+                <!-- 标签页列表 -->
+            </div>
         </div>
         
         <div id="viewport">
@@ -142,6 +170,8 @@
         let imageReady = false;
         let lastMouseMoveTime = 0;
         const MOUSE_MOVE_THROTTLE = 30;
+        let lastScrollTime = 0;
+        const SCROLL_THROTTLE = 100; // 限制滚动事件频率为 100ms 一次
 
         function debug(msg) {
             if (document.getElementById('debugMode').checked) {
@@ -216,8 +246,29 @@
                     }
                 } else if (msg.type === 'error') {
                     alert(msg.message);
+                } else if (msg.type === 'tabs') {
+                    updateTabs(msg.tabs, msg.activeId);
                 }
             };
+        }
+
+        function updateTabs(tabs, activeId) {
+            const tabList = document.getElementById('tabList');
+            tabList.innerHTML = '';
+            
+            tabs.forEach(tab => {
+                const div = document.createElement('div');
+                div.className = `tab-item ${tab.id === activeId ? 'active' : ''}`;
+                div.textContent = tab.title || tab.url || 'Untitled';
+                div.title = tab.url;
+                div.onclick = () => switchTab(tab.id);
+                tabList.appendChild(div);
+            });
+        }
+
+        function switchTab(tabId) {
+            if (!ws) return;
+            ws.send(JSON.stringify({ type: 'control', command: 'switch_tab', tabId: tabId }));
         }
 
         async function navigate() {
@@ -307,6 +358,8 @@
 图片显示尺寸: ${rect.width.toFixed(0)} x ${rect.height.toFixed(0)}
 图片原始尺寸: ${screen.naturalWidth} x ${screen.naturalHeight}
 viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight}
+pageScaleFactor: ${currentMetadata.pageScaleFactor}
+scroll: (${currentMetadata.scrollOffsetX}, ${currentMetadata.scrollOffsetY})
 相对位置: (${(relX*100).toFixed(1)}%, ${(relY*100).toFixed(1)}%)
 发送坐标: (${x.toFixed(0)}, ${y.toFixed(0)})`);
             
@@ -320,7 +373,12 @@ viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight
             
             const coords = calculateCoordinates(e);
             if (coords) {
-                sendInput({ type: 'mousemove', x: coords.x, y: coords.y });
+                sendInput({ 
+                    type: 'mousemove', 
+                    x: coords.x, 
+                    y: coords.y,
+                    modifiers: getModifiers(e)
+                });
             }
         }
 
@@ -329,7 +387,13 @@ viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight
             const coords = calculateCoordinates(e);
             if (coords) {
                 const button = ['left', 'middle', 'right'][e.button] || 'left';
-                sendInput({ type: 'mousedown', x: coords.x, y: coords.y, button: button });
+                sendInput({ 
+                    type: 'mousedown', 
+                    x: coords.x, 
+                    y: coords.y, 
+                    button: button,
+                    modifiers: getModifiers(e)
+                });
             }
         }
 
@@ -338,12 +402,22 @@ viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight
             const coords = calculateCoordinates(e);
             if (coords) {
                 const button = ['left', 'middle', 'right'][e.button] || 'left';
-                sendInput({ type: 'mouseup', x: coords.x, y: coords.y, button: button });
+                sendInput({ 
+                    type: 'mouseup', 
+                    x: coords.x, 
+                    y: coords.y, 
+                    button: button,
+                    modifiers: getModifiers(e)
+                });
             }
         }
 
         function handleWheel(e) {
             e.preventDefault();
+            const now = Date.now();
+            if (now - lastScrollTime < SCROLL_THROTTLE) return;
+            lastScrollTime = now;
+
             const coords = calculateCoordinates(e);
             if (coords) {
                 sendInput({ 
@@ -351,9 +425,19 @@ viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight
                     x: coords.x, 
                     y: coords.y,
                     deltaX: e.deltaX, 
-                    deltaY: e.deltaY 
+                    deltaY: e.deltaY,
+                    modifiers: getModifiers(e)
                 });
             }
+        }
+
+        function getModifiers(e) {
+            let modifiers = 0;
+            if (e.altKey) modifiers |= 1;
+            if (e.ctrlKey) modifiers |= 2;
+            if (e.metaKey) modifiers |= 4;
+            if (e.shiftKey) modifiers |= 8;
+            return modifiers;
         }
 
         function handleKeyDown(e) {
@@ -361,11 +445,25 @@ viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight
             if (['Tab', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter'].includes(e.key)) {
                 e.preventDefault();
             }
-            sendInput({ type: 'keydown', key: e.key });
+            sendInput({ 
+                type: 'keydown', 
+                key: e.key,
+                code: e.code,
+                location: e.location,
+                modifiers: getModifiers(e),
+                windowsVirtualKeyCode: e.keyCode,
+                nativeVirtualKeyCode: e.keyCode
+            });
         }
 
         function handleKeyUp(e) {
-            sendInput({ type: 'keyup', key: e.key });
+            sendInput({ 
+                type: 'keyup', 
+                key: e.key,
+                code: e.code,
+                location: e.location,
+                modifiers: getModifiers(e)
+            });
         }
 
         function handleContextMenu(e) {
