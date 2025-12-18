@@ -1,29 +1,41 @@
 # Browser RPC
 
-> High-performance browser automation RPC service based on Playwright + gRPC with powerful anti-detection capabilities
+> High-performance browser automation RPC service based on Playwright + gRPC with powerful anti-detection capabilities. Now supports Distributed Architecture and Docker Deployment.
 
 [![CI](https://github.com/LBatsoft/browser_rpc/actions/workflows/ci.yml/badge.svg)](https://github.com/LBatsoft/browser_rpc/actions/workflows/ci.yml)
 
 ## ✨ Features
 
 - 🛡️ **Powerful Anti-Detection**: playwright-stealth + custom scripts to bypass common bot detection
-- 🔌 **gRPC Interface**: 13 standardized APIs supporting remote calls
+- 🔌 **Unified Gateway**: Distributed architecture with Gateway as single entry point (Load Balancing & Routing)
+- 🐳 **Docker Ready**: One-click deployment with Docker Compose
+- 🖥️ **Remote Control UI**: Real-time browser remote control with multi-tab support
 - 📡 **Network Interception**: Complete request/response capture capabilities
 - 🚀 **High Performance**: Supports multi-session concurrency with resource pool management
-- 🎨 **Easy to Use**: Clean Python client API
+- 🔒 **Security**: API Key authentication for clients + Cluster Secret for internal communication
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Docker) - Recommended
 
-### One-Click Test (Recommended)
+The easiest way to start the distributed cluster (Gateway + Redis + Worker Nodes).
+
+### 1. Requirements
+
+- Docker & Docker Compose
+
+### 2. Start Cluster
 
 ```bash
-cd /path/to/browser_rpc
-./scripts/quick_test.sh
+docker compose up --build -d
 ```
 
-This will automatically: install browser → start server → run tests → cleanup
+### 3. Verify
 
-## 📦 Installation
+Access the remote control interface:
+http://localhost:8000/static/remote.html
+
+> Note: By default, `API_KEY` is set to `dev-test-key`. You might need to configure headers if using the UI directly, or disable auth in `docker-compose.yml` for testing.
+
+## 📦 Installation (Local Development)
 
 ### 1. Install Dependencies
 
@@ -37,7 +49,7 @@ pip install -r requirements.txt
 python -m grpc_tools.protoc -I./proto --python_out=. --grpc_python_out=. ./proto/spider.proto
 ```
 
-### 3. Install Browser (First Time)
+### 3. Install Browser
 
 ```bash
 playwright install chromium
@@ -45,276 +57,108 @@ playwright install chromium
 
 ## 💻 Usage
 
-### Start Server
+### HTTP API (via Gateway)
 
-**gRPC Server:**
-```bash
-./scripts/start_rpc_server.sh
-# or
-python rpc_server.py
-```
+The system provides a RESTful API via the Gateway (Default port: 8000).
 
-**HTTP Server:**
-```bash
-./scripts/start_http_server.sh
-# or
-python http_server.py
-```
+**Authentication Headers:**
+- `X-API-Key`: `dev-test-key` (Default in docker-compose.yml)
 
-The HTTP server provides:
-- **API Documentation**: http://localhost:8000/docs (Swagger UI)
-- **ReDoc**: http://localhost:8000/redoc
-- **REST API**: http://localhost:8000/api/*
-
-### Basic Example (gRPC)
+#### Basic Python Example
 
 ```python
-import asyncio
-from rpc_client import BrowserRPCClient
+import requests
 
-async def main():
-    client = BrowserRPCClient()
-    await client.connect()
-    
-    # Create session
-    await client.create_session(headless=True)
-    
-    # Navigate to page
-    await client.navigate('https://www.example.com')
-    
-    # Get content
-    html = await client.get_page_content()
-    
-    await client.close()
+GATEWAY_URL = "http://localhost:8000"
+HEADERS = {"X-API-Key": "dev-test-key"}
 
-asyncio.run(main())
+# 1. Create Session
+resp = requests.post(f"{GATEWAY_URL}/api/sessions", json={"headless": True}, headers=HEADERS)
+session_id = resp.json()["session_id"]
+print(f"Session Created: {session_id}")
+
+# 2. Navigate
+requests.post(
+    f"{GATEWAY_URL}/api/sessions/{session_id}/navigate",
+    json={"url": "https://www.google.com"},
+    headers=HEADERS
+)
+
+# 3. Take Screenshot
+requests.post(
+    f"{GATEWAY_URL}/api/sessions/{session_id}/screenshot",
+    json={"full_page": False},
+    headers=HEADERS
+)
+
+# 4. Close Session
+requests.delete(f"{GATEWAY_URL}/api/sessions/{session_id}", headers=HEADERS)
 ```
 
-### Basic Example (HTTP)
+### API Documentation
 
-```python
-import asyncio
-from http_client import BrowserHTTPClient
+Once started, visit: http://localhost:8000/docs
 
-async def main():
-    client = BrowserHTTPClient(base_url='http://localhost:8000')
-    
-    try:
-        # Create session
-        await client.create_session(headless=True)
-        
-        # Navigate to page
-        await client.navigate('https://www.example.com')
-        
-        # Get content
-        html = await client.get_page_content()
-        
-        # Take screenshot
-        await client.take_screenshot(save_path='page.png', full_page=True)
-        
-    finally:
-        await client.close()
+## 🏗️ Architecture
 
-asyncio.run(main())
+The system has evolved into a distributed microservices architecture:
+
+```mermaid
+graph TD
+    Client[Client / Frontend] -->|X-API-Key| Gateway[Gateway :8000]
+    Gateway -->|Service Discovery| Redis[(Redis)]
+    Gateway -->|Load Balanced| Node1[Worker Node 1]
+    Gateway -->|Load Balanced| Node2[Worker Node 2]
+    Node1 -->|Heartbeat| Redis
+    Node2 -->|Heartbeat| Redis
 ```
 
-### Advanced Example
-
-```python
-# Set headers
-await client.set_headers({
-    'Authorization': 'Bearer token'
-})
-
-# Set cookies
-await client.set_cookies([{
-    'name': 'session',
-    'value': 'abc123',
-    'domain': '.example.com'
-}])
-
-# Wait and click element
-await client.wait_for_element('button#submit')
-await client.click_element('button#submit')
-
-# Type text
-await client.type_text('input#username', 'myname')
-
-# Take screenshot
-await client.take_screenshot(save_path='page.png', full_page=True)
-
-# Get network requests
-requests = await client.get_network_requests(url_pattern=r'/api/')
-for req in requests:
-    print(f"{req['method']} {req['url']}")
-    if req.get('response'):
-        print(f"Response: {req['response']['body']}")
-```
-
-### HTTP API Endpoints
-
-The HTTP server provides RESTful API endpoints:
-
-- `POST /api/sessions` - Create browser session
-- `DELETE /api/sessions/{session_id}` - Close session
-- `POST /api/sessions/{session_id}/navigate` - Navigate to URL
-- `POST /api/sessions/{session_id}/execute` - Execute JavaScript
-- `GET /api/sessions/{session_id}/content` - Get page HTML
-- `POST /api/sessions/{session_id}/network` - Get network requests
-- `POST /api/sessions/{session_id}/wait` - Wait for element
-- `POST /api/sessions/{session_id}/click` - Click element
-- `POST /api/sessions/{session_id}/type` - Type text
-- `POST /api/sessions/{session_id}/screenshot` - Take screenshot
-- `POST /api/sessions/{session_id}/headers` - Set headers
-- `POST /api/sessions/{session_id}/cookies` - Set cookies
-- `GET /api/sessions/{session_id}/cookies` - Get cookies
-
-Visit http://localhost:8000/docs for interactive API documentation.
-
-## 📋 Available RPC APIs
-
-| API | Description |
-|-----|-------------|
-| `CreateSession` | Create browser session |
-| `CloseSession` | Close session |
-| `Navigate` | Navigate to URL |
-| `ExecuteScript` | Execute JavaScript |
-| `GetPageContent` | Get page HTML |
-| `GetNetworkRequests` | Get network requests |
-| `WaitForElement` | Wait for element |
-| `ClickElement` | Click element |
-| `TypeText` | Type text |
-| `TakeScreenshot` | Take screenshot |
-| `SetHeaders` | Set request headers |
-| `SetCookies` | Set cookies |
-| `GetCookies` | Get cookies |
-
-## 🛡️ Anti-Detection Capabilities
-
-### Automatically Hidden Features
-
-- ✅ `navigator.webdriver`
-- ✅ `window.chrome` object
-- ✅ `plugins` and `mimeTypes`
-- ✅ Automation traces (`cdc_*` variables)
-- ✅ WebGL fingerprint consistency
-- ✅ Permission state simulation
+- **Gateway**: Handles Auth, Load Balancing, and Request Routing.
+- **Worker Node**: Executes browser automation tasks (Playwright).
+- **Redis**: Stores node registry, heartbeats, and session mapping.
 
 ## 🔧 Configuration
 
-### Server Configuration (`config.py`)
+Configuration is managed via Environment Variables (or `config.py` defaults).
 
-```python
-RPC_HOST = '0.0.0.0'          # Listen address
-RPC_PORT = 50051              # Listen port
-MAX_SESSIONS = 10             # Max sessions
-SESSION_TIMEOUT = 3600        # Session timeout (seconds)
-```
-
-### Client Configuration
-
-```python
-# Connect to remote server
-client = BrowserRPCClient(host='192.168.1.100', port=50051)
-```
-
-## 📊 Performance
-
-- **Single session memory**: 100-200MB
-- **Startup time**: 1-3 seconds
-- **Default timeout**: 30 seconds
-- **Max concurrency**: 10 sessions (configurable)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` |
+| `HTTP_PORT` | Service listening port | `8000` |
+| `MAX_SESSIONS` | Max concurrent sessions per node | `10` |
+| `API_KEY` | Client access token | `None` (Disabled) |
+| `CLUSTER_SECRET` | Internal communication secret | `None` (Disabled) |
 
 ## 🗂️ Project Structure
 
 ```
 browser_rpc/
-├── proto/
-│   └── spider.proto          # gRPC service definition
-├── spider_pb2.py             # Generated protobuf code
-├── spider_pb2_grpc.py        # Generated gRPC code
-├── docs/                     # Documentation
-│   ├── README_CN.md
-│   ├── anti_detection_notes.md
-│   └── startup_guide.md
-├── resources/
-│   ├── screenshots/          # Test screenshots
-│   └── stealth/              # Stealth scripts
-├── scripts/
-│   ├── install.sh
-│   ├── quick_test.sh
-│   ├── start_rpc_server.sh
-│   └── start_server.sh
-├── cdp_client.py             # CDP client implementation
-├── rpc_server.py             # gRPC server
-├── rpc_client.py             # gRPC client wrapper
-├── config.py                 # Configuration
-└── requirements.txt          # Dependencies
+├── core/
+│   └── registry.py           # Service discovery & Load balancing logic
+├── proto/                    # gRPC definitions
+├── static/                   # Remote Control UI
+├── scripts/                  # Helper scripts
+├── gateway.py                # API Gateway entry point
+├── http_server.py            # Worker Node entry point
+├── cdp_client.py             # Playwright/CDP wrapper
+├── config.py                 # Configuration loader
+├── docker-compose.yml        # Docker orchestration
+└── Dockerfile                # Container definition
 ```
 
-## 🎯 Use Cases
+## 🛡️ Anti-Detection Capabilities
 
-- ✅ Scraping JavaScript-rendered pages
-- ✅ Bypassing anti-bot detection
-- ✅ Capturing AJAX/API request data
-- ✅ Automated testing
-- ✅ Page screenshot service
-- ✅ Form auto-filling
-
-## ⚠️ Troubleshooting
-
-### Q: Connection refused error?
-**A:** Server not started, run `./scripts/start_rpc_server.sh`
-
-### Q: Browser not installed?
-**A:** Run `playwright install chromium`
-
-### Q: Port already in use?
-**A:** `lsof -ti:50051 | xargs kill -9`
-
-### Q: Module import error?
-**A:** `pip install -r requirements.txt`
-
-## 📚 Documentation
-
-- **中文文档**: [docs/README_CN.md](docs/README_CN.md)
-- **API Definition**: [proto/spider.proto](proto/spider.proto)
-- **Startup Guide**: [docs/startup_guide.md](docs/startup_guide.md)
-- **Anti-Detection Notes**: [docs/anti_detection_notes.md](docs/anti_detection_notes.md)
+- ✅ `navigator.webdriver` hidden
+- ✅ `window.chrome` object mocked
+- ✅ Automation traces removed
+- ✅ WebGL fingerprint consistency
+- ✅ Permission state simulation
 
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details
 
-## 🔄 CI/CD
-
-This project uses GitHub Actions for continuous integration and deployment:
-
-- **CI Workflow** (`.github/workflows/ci.yml`):
-  - Tests on Python 3.9, 3.10, and 3.11
-  - Installs dependencies and Playwright browsers
-  - Compiles Proto files
-  - Verifies imports and code syntax
-  - Tests server startup
-  - Runs code linting (flake8, pylint)
-
-- **CD Workflow** (`.github/workflows/cd.yml`):
-  - Creates release archives for version tags
-  - Optional GitHub Pages deployment (commented out by default, see workflow file for instructions)
-
-The CI pipeline runs automatically on every push and pull request to the `master` branch.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-Before submitting, please ensure:
-- Code passes all CI checks
-- Follows the project's code style (configured in `.flake8`)
-- Includes appropriate tests if applicable
-
 ---
 
-**Version**: 1.0.0  
+**Version**: 2.0.0 (Distributed)
 **Status**: ✅ Production Ready
-
