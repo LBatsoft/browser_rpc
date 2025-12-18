@@ -1,1 +1,507 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Remote Control</title>
+    <style>
+        body { margin: 0; padding: 20px; font-family: sans-serif; background: #f0f2f5; }
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+        }
+        button {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.stop { background: #dc3545; }
+        button.stop:hover { background: #c82333; }
+        
+        #status {
+            margin-left: auto;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        #viewport {
+            position: relative;
+            background: #1a1a2e;
+            width: fit-content;
+            max-width: 100%;
+            margin: 0 auto;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            user-select: none;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #screen {
+            display: block;
+            cursor: default;
+            max-width: 100%;
+            height: auto;
+        }
 
+        /* 标签页样式 */
+        .tabs {
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+        .tab-item {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            background: #f5f5f5;
+            font-size: 12px;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tab-item.active {
+            background: #fff;
+            border-bottom-color: #fff;
+            font-weight: bold;
+        }
+        
+        #debugInfo {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: #0f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+            z-index: 1000;
+            white-space: pre;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <input type="text" id="apiKey" placeholder="API Key" value="dev-test-key">
+        <input type="text" id="sessionId" placeholder="Session ID">
+        <button onclick="createSession()" id="btnCreate">Create Session</button>
+        <button onclick="connect()" id="btnConnect" disabled>Connect</button>
+        <button onclick="toggleDebug()">Debug Info</button>
+        <div id="status">Ready</div>
+    </div>
+
+    <div class="controls">
+        <input type="text" id="urlInput" placeholder="https://example.com" style="flex: 1;">
+        <button onclick="navigate()">Go</button>
+        <button onclick="startRecord()" id="btnRecord">Start Record</button>
+        <button onclick="stopRecord()" id="btnStopRecord" class="stop" disabled>Stop Record</button>
+        <button onclick="replay()" id="btnReplay" disabled>Replay Last</button>
+    </div>
+
+    <div id="tabList" class="tabs" style="margin-top: 10px; display: flex; gap: 5px; overflow-x: auto;">
+        <!-- 标签页列表 -->
+    </div>
+
+    <div id="viewport">
+        <img id="screen" draggable="false" oncontextmenu="return false;">
+    </div>
+
+    <div id="debugInfo"></div>
+
+    <script>
+        let ws;
+        let isInteracting = false;
+        let lastTaskName = '';
+        let currentMetadata = {
+            deviceWidth: 1920,
+            deviceHeight: 1080,
+            pageScaleFactor: 1,
+            scrollOffsetX: 0,
+            scrollOffsetY: 0
+        };
+        let lastMouseMoveTime = 0;
+        const MOUSE_MOVE_THROTTLE = 30; // ms
+        let lastScrollTime = 0;
+        const SCROLL_THROTTLE = 100; // ms
+
+        function debug(msg) {
+            const el = document.getElementById('debugInfo');
+            el.textContent = msg;
+        }
+
+        function toggleDebug() {
+            const el = document.getElementById('debugInfo');
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function updateStatus(msg) {
+            document.getElementById('status').textContent = msg;
+            console.log(msg);
+        }
+
+        async function createSession() {
+            const apiKey = document.getElementById('apiKey').value;
+            const btn = document.getElementById('btnCreate');
+            btn.disabled = true;
+            updateStatus('Creating session...');
+            
+            try {
+                const res = await fetch('/api/sessions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': apiKey
+                    },
+                    body: JSON.stringify({
+                        headless: true,
+                        width: 1280,
+                        height: 720
+                    })
+                });
+                
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('sessionId').value = data.session_id;
+                    document.getElementById('btnConnect').disabled = false;
+                    updateStatus('Session created: ' + data.session_id);
+                } else {
+                    updateStatus('Error: ' + data.detail || 'Unknown error');
+                }
+            } catch (e) {
+                updateStatus('Create failed: ' + e);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function connect() {
+            const sessionId = document.getElementById('sessionId').value;
+            const apiKey = document.getElementById('apiKey').value;
+            if (!sessionId) return;
+
+            if (ws) ws.close();
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            // 添加 token 参数鉴权
+            const wsUrl = `${protocol}//${window.location.host}/ws/sessions/${sessionId}?token=${encodeURIComponent(apiKey)}`;
+            
+            updateStatus('Connecting...');
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                updateStatus('Connected');
+                document.getElementById('btnConnect').textContent = 'Disconnect';
+                document.getElementById('btnConnect').onclick = disconnect;
+                enableInteraction();
+            };
+            
+            ws.onclose = (e) => {
+                updateStatus(`Disconnected (Code: ${e.code})`);
+                document.getElementById('btnConnect').textContent = 'Connect';
+                document.getElementById('btnConnect').onclick = connect;
+                disableInteraction();
+            };
+            
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                updateStatus('Connection Error');
+            };
+            
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                
+                if (msg.type === 'frame') {
+                    const img = document.getElementById('screen');
+                    img.src = 'data:image/jpeg;base64,' + msg.data;
+                    if (msg.metadata) {
+                        currentMetadata = msg.metadata;
+                    }
+                    if (msg.tabs) {
+                        updateTabs(msg.tabs, msg.activeId);
+                    }
+                } else if (msg.type === 'status') {
+                    updateStatus(msg.message);
+                    if (msg.taskName) {
+                        lastTaskName = msg.taskName;
+                        document.getElementById('btnReplay').disabled = false;
+                    }
+                } else if (msg.type === 'error') {
+                    alert('Server Error: ' + msg.message);
+                } else if (msg.type === 'tabs') {
+                    updateTabs(msg.tabs, msg.activeId);
+                }
+            };
+        }
+
+        function updateTabs(tabs, activeId) {
+            const tabList = document.getElementById('tabList');
+            tabList.innerHTML = '';
+            tabs.forEach(tab => {
+                const div = document.createElement('div');
+                div.className = `tab-item ${tab.id === activeId ? 'active' : ''}`;
+                div.textContent = tab.title || tab.url || 'Untitled';
+                div.title = tab.url;
+                div.onclick = () => switchTab(tab.id);
+                tabList.appendChild(div);
+            });
+        }
+
+        function switchTab(tabId) {
+            if (!ws) return;
+            ws.send(JSON.stringify({
+                type: 'control',
+                command: 'switch_tab',
+                tabId: tabId
+            }));
+        }
+
+        function disconnect() {
+            if (ws) ws.close();
+        }
+
+        async function navigate() {
+            const sessionId = document.getElementById('sessionId').value;
+            const apiKey = document.getElementById('apiKey').value;
+            const url = document.getElementById('urlInput').value;
+            if (!sessionId || !url) return;
+            
+            updateStatus('Navigating...');
+            try {
+                await fetch(`/api/sessions/${sessionId}/navigate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': apiKey
+                    },
+                    body: JSON.stringify({ url: url })
+                });
+            } catch (e) {
+                updateStatus('Navigate failed: ' + e);
+            }
+        }
+
+        function startRecord() {
+            if (!ws) return;
+            ws.send(JSON.stringify({
+                type: 'control',
+                command: 'start_record'
+            }));
+            document.getElementById('btnRecord').disabled = true;
+            document.getElementById('btnStopRecord').disabled = false;
+        }
+
+        function stopRecord() {
+            if (!ws) return;
+            ws.send(JSON.stringify({
+                type: 'control',
+                command: 'stop_record'
+            }));
+            document.getElementById('btnRecord').disabled = false;
+            document.getElementById('btnStopRecord').disabled = true;
+        }
+
+        function replay() {
+            if (!ws || !lastTaskName) return;
+            ws.send(JSON.stringify({
+                type: 'control',
+                command: 'replay',
+                taskName: lastTaskName
+            }));
+        }
+
+        function sendInput(event) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({
+                type: 'input',
+                event: event
+            }));
+        }
+
+        function calculateCoordinates(e) {
+            const screen = document.getElementById('screen');
+            const rect = screen.getBoundingClientRect();
+            
+            // 鼠标相对于图片左上角的位置
+            const imgX = e.clientX - rect.left;
+            const imgY = e.clientY - rect.top;
+            
+            // 相对比例 (0.0 - 1.0)
+            const relX = imgX / rect.width;
+            const relY = imgY / rect.height;
+            
+            // 映射到设备坐标
+            // 注意：CDP 需要的是视口坐标，加上 scrollOffset
+            // 但是我们的图片是当前视口的截图，所以不需要加 scrollOffset
+            // 只需要乘以 deviceWidth/Height
+            const x = relX * currentMetadata.deviceWidth;
+            const y = relY * currentMetadata.deviceHeight;
+
+            // 调试信息
+            debug(`鼠标位置: (${e.clientX}, ${e.clientY})
+图片内位置: (${imgX.toFixed(1)}, ${imgY.toFixed(1)})
+图片显示尺寸: ${rect.width.toFixed(0)} x ${rect.height.toFixed(0)}
+图片原始尺寸: ${screen.naturalWidth} x ${screen.naturalHeight}
+viewport 尺寸: ${currentMetadata.deviceWidth} x ${currentMetadata.deviceHeight}
+pageScaleFactor: ${currentMetadata.pageScaleFactor}
+scroll: (${currentMetadata.scrollOffsetX}, ${currentMetadata.scrollOffsetY})
+相对位置: (${(relX*100).toFixed(1)}%, ${(relY*100).toFixed(1)}%)
+发送坐标: (${x.toFixed(0)}, ${y.toFixed(0)})`);
+
+            // 只有在图片范围内才发送
+            if (relX >= 0 && relX <= 1 && relY >= 0 && relY <= 1) {
+                return { x, y };
+            }
+            return null;
+        }
+
+        function handleMouseMove(e) {
+            const now = Date.now();
+            if (now - lastMouseMoveTime < MOUSE_MOVE_THROTTLE) return;
+            lastMouseMoveTime = now;
+            
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                sendInput({
+                    type: 'mousemove',
+                    x: coords.x,
+                    y: coords.y,
+                    modifiers: getModifiers(e)
+                });
+            }
+        }
+
+        function handleMouseDown(e) {
+            e.preventDefault();
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                const button = ['left', 'middle', 'right'][e.button] || 'left';
+                sendInput({
+                    type: 'mousedown',
+                    x: coords.x,
+                    y: coords.y,
+                    button: button,
+                    modifiers: getModifiers(e)
+                });
+            }
+        }
+
+        function handleMouseUp(e) {
+            e.preventDefault();
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                const button = ['left', 'middle', 'right'][e.button] || 'left';
+                sendInput({
+                    type: 'mouseup',
+                    x: coords.x,
+                    y: coords.y,
+                    button: button,
+                    modifiers: getModifiers(e)
+                });
+            }
+        }
+
+        function handleWheel(e) {
+            e.preventDefault();
+            const now = Date.now();
+            if (now - lastScrollTime < SCROLL_THROTTLE) return;
+            lastScrollTime = now;
+
+            const coords = calculateCoordinates(e);
+            if (coords) {
+                sendInput({
+                    type: 'scroll',
+                    x: coords.x,
+                    y: coords.y,
+                    deltaX: e.deltaX,
+                    deltaY: e.deltaY,
+                    modifiers: getModifiers(e)
+                });
+            }
+        }
+
+        function getModifiers(e) {
+            let modifiers = 0;
+            if (e.altKey) modifiers |= 1;
+            if (e.ctrlKey) modifiers |= 2;
+            if (e.metaKey) modifiers |= 4;
+            if (e.shiftKey) modifiers |= 8;
+            return modifiers;
+        }
+
+        function handleKeyDown(e) {
+            if (e.repeat) return;
+            // 阻止一些常见快捷键，避免影响浏览器
+            if (['Tab', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter'].includes(e.key)) {
+                e.preventDefault();
+            }
+            sendInput({
+                type: 'keydown',
+                key: e.key,
+                code: e.code,
+                location: e.location,
+                modifiers: getModifiers(e),
+                windowsVirtualKeyCode: e.keyCode,
+                nativeVirtualKeyCode: e.keyCode
+            });
+        }
+
+        function handleKeyUp(e) {
+            sendInput({
+                type: 'keyup',
+                key: e.key,
+                code: e.code,
+                location: e.location,
+                modifiers: getModifiers(e)
+            });
+        }
+
+        function enableInteraction() {
+            if (isInteracting) return;
+            isInteracting = true;
+            
+            const screen = document.getElementById('screen');
+            screen.addEventListener('mousemove', handleMouseMove);
+            screen.addEventListener('mousedown', handleMouseDown);
+            screen.addEventListener('mouseup', handleMouseUp);
+            screen.addEventListener('wheel', handleWheel);
+            
+            document.addEventListener('keydown', handleKeyDown);
+            document.addEventListener('keyup', handleKeyUp);
+        }
+
+        function disableInteraction() {
+            if (!isInteracting) return;
+            isInteracting = false;
+            
+            const screen = document.getElementById('screen');
+            screen.removeEventListener('mousemove', handleMouseMove);
+            screen.removeEventListener('mousedown', handleMouseDown);
+            screen.removeEventListener('mouseup', handleMouseUp);
+            screen.removeEventListener('wheel', handleWheel);
+            
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('keyup', handleKeyUp);
+        }
+    </script>
+</body>
+</html>

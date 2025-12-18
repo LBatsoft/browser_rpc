@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, Security, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security.api_key import APIKeyHeader
 import httpx
 import websockets
@@ -27,16 +28,36 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# 挂载静态文件 (用于远程控制前端)
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
 config = get_config()
 registry: Optional[NodeRegistry] = None
 # Disable SSL verification for sandbox compatibility
 http_client = httpx.AsyncClient(verify=False)
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def verify_client_auth(api_key: str = Security(api_key_header)):
-    """验证客户端 API Key"""
-    if config.API_KEY and api_key != config.API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+async def verify_client_auth(
+    request: Request,
+    api_key: str = Security(api_key_header)
+):
+    """验证客户端 API Key (支持 Header 和 Query Param)"""
+    if not config.API_KEY:
+        return
+        
+    # 1. 优先检查 Header (由 Security 自动提取，若无则 api_key 为 None)
+    if api_key == config.API_KEY:
+        return
+
+    # 2. 检查 Query Param (针对 WebSocket 等无法设置 Header 的场景)
+    query_token = request.query_params.get("token")
+    if query_token == config.API_KEY:
+        return
+        
+    # 3. 验证失败
+    raise HTTPException(status_code=403, detail="Invalid API Key")
 
 def get_upstream_headers(original_headers: dict = None) -> dict:
     """构造上游请求头，注入内部通信密钥"""
@@ -183,7 +204,16 @@ async def close_session(session_id: str):
 # 注意：FastAPI 实现 WebSocket 代理比较复杂，这里使用简化的管道模式
 @app.websocket("/ws/sessions/{session_id}")
 async def websocket_proxy(client_ws: WebSocket, session_id: str):
+    # WebSocket 鉴权需要手动处理，因为 Depends 在 WebSocket 中行为不同
+    # 或者是接受后再关闭
     await client_ws.accept()
+    
+    # 手动验证 token
+    token = client_ws.query_params.get("token")
+    if config.API_KEY and token != config.API_KEY:
+         logger.warning(f"WebSocket auth failed for session {session_id}")
+         await client_ws.close(code=1008, reason="Invalid API Key")
+         return
     
     try:
         node = await get_node_for_session(session_id)
