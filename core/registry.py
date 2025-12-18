@@ -80,15 +80,19 @@ class NodeRegistry:
         except Exception as e:
             logger.error(f"Failed to update load: {e}")
 
-    async def get_best_node(self) -> Optional[Dict]:
+    async def get_best_node(self, exclude_nodes: List[str] = None) -> Optional[Dict]:
         """获取最佳可用节点 (简单的最少连接数策略)"""
         await self.connect()
+        exclude_nodes = exclude_nodes or []
         try:
             nodes = await self.redis.hgetall('nodes')
             best_node = None
             min_load = float('inf')
             
             for node_id, info_str in nodes.items():
+                if node_id in exclude_nodes:
+                    continue
+                    
                 # 检查心跳
                 if not await self.redis.exists(f"node_heartbeat:{node_id}"):
                     # 清理过期节点

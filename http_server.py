@@ -10,7 +10,7 @@ import logging
 import sys
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -49,6 +49,15 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # 全局浏览器池
 browser_pool: Optional[BrowserPool] = None
 node_registry: Optional[NodeRegistry] = None
+
+
+async def verify_cluster_secret(x_cluster_secret: Optional[str] = Header(None, alias="X-Cluster-Secret")):
+    """验证内部集群通信密钥"""
+    from config import get_config
+    config = get_config()
+    if config.CLUSTER_SECRET:
+         if x_cluster_secret != config.CLUSTER_SECRET:
+             raise HTTPException(status_code=403, detail="Invalid Cluster Secret")
 
 
 # Pydantic 模型定义
@@ -248,7 +257,7 @@ async def root():
     }
 
 
-@app.post("/api/sessions", response_model=CreateSessionResponse)
+@app.post("/api/sessions", response_model=CreateSessionResponse, dependencies=[Depends(verify_cluster_secret)])
 async def create_session(request: CreateSessionRequest):
     """创建浏览器会话"""
     try:
@@ -281,7 +290,7 @@ async def create_session(request: CreateSessionRequest):
         raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
 
 
-@app.delete("/api/sessions/{session_id}", response_model=CloseSessionResponse)
+@app.delete("/api/sessions/{session_id}", response_model=CloseSessionResponse, dependencies=[Depends(verify_cluster_secret)])
 async def close_session(session_id: str):
     """关闭浏览器会话"""
     try:
@@ -306,7 +315,7 @@ async def close_session(session_id: str):
         raise HTTPException(status_code=500, detail=f"关闭会话失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/navigate", response_model=NavigateResponse)
+@app.post("/api/sessions/{session_id}/navigate", response_model=NavigateResponse, dependencies=[Depends(verify_cluster_secret)])
 async def navigate(session_id: str, request: NavigateRequest):
     """导航到指定 URL"""
     try:
@@ -326,7 +335,7 @@ async def navigate(session_id: str, request: NavigateRequest):
         raise HTTPException(status_code=500, detail=f"导航失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/execute", response_model=ExecuteScriptResponse)
+@app.post("/api/sessions/{session_id}/execute", response_model=ExecuteScriptResponse, dependencies=[Depends(verify_cluster_secret)])
 async def execute_script(session_id: str, request: ExecuteScriptRequest):
     """执行 JavaScript"""
     try:
@@ -348,7 +357,7 @@ async def execute_script(session_id: str, request: ExecuteScriptRequest):
         )
 
 
-@app.get("/api/sessions/{session_id}/content", response_model=GetPageContentResponse)
+@app.get("/api/sessions/{session_id}/content", response_model=GetPageContentResponse, dependencies=[Depends(verify_cluster_secret)])
 async def get_page_content(session_id: str):
     """获取页面内容"""
     try:
@@ -368,7 +377,7 @@ async def get_page_content(session_id: str):
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/network", response_model=GetNetworkRequestsResponse)
+@app.post("/api/sessions/{session_id}/network", response_model=GetNetworkRequestsResponse, dependencies=[Depends(verify_cluster_secret)])
 async def get_network_requests(session_id: str, request: GetNetworkRequestsRequest):
     """获取拦截的网络请求"""
     try:
@@ -404,7 +413,7 @@ async def get_network_requests(session_id: str, request: GetNetworkRequestsReque
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/wait", response_model=WaitForElementResponse)
+@app.post("/api/sessions/{session_id}/wait", response_model=WaitForElementResponse, dependencies=[Depends(verify_cluster_secret)])
 async def wait_for_element(session_id: str, request: WaitForElementRequest):
     """等待元素出现"""
     try:
@@ -423,7 +432,7 @@ async def wait_for_element(session_id: str, request: WaitForElementRequest):
         raise HTTPException(status_code=500, detail=f"等待失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/click", response_model=ClickElementResponse)
+@app.post("/api/sessions/{session_id}/click", response_model=ClickElementResponse, dependencies=[Depends(verify_cluster_secret)])
 async def click_element(session_id: str, request: ClickElementRequest):
     """点击元素"""
     try:
@@ -442,7 +451,7 @@ async def click_element(session_id: str, request: ClickElementRequest):
         raise HTTPException(status_code=500, detail=f"点击失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/type", response_model=TypeTextResponse)
+@app.post("/api/sessions/{session_id}/type", response_model=TypeTextResponse, dependencies=[Depends(verify_cluster_secret)])
 async def type_text(session_id: str, request: TypeTextRequest):
     """输入文本"""
     try:
@@ -461,7 +470,7 @@ async def type_text(session_id: str, request: TypeTextRequest):
         raise HTTPException(status_code=500, detail=f"输入失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/screenshot", response_model=TakeScreenshotResponse)
+@app.post("/api/sessions/{session_id}/screenshot", response_model=TakeScreenshotResponse, dependencies=[Depends(verify_cluster_secret)])
 async def take_screenshot(session_id: str, request: TakeScreenshotRequest):
     """页面截图"""
     try:
@@ -487,7 +496,7 @@ async def take_screenshot(session_id: str, request: TakeScreenshotRequest):
         raise HTTPException(status_code=500, detail=f"截图失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/headers", response_model=SetHeadersResponse)
+@app.post("/api/sessions/{session_id}/headers", response_model=SetHeadersResponse, dependencies=[Depends(verify_cluster_secret)])
 async def set_headers(session_id: str, request: SetHeadersRequest):
     """设置请求头"""
     try:
@@ -506,7 +515,7 @@ async def set_headers(session_id: str, request: SetHeadersRequest):
         raise HTTPException(status_code=500, detail=f"设置失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/cookies", response_model=SetCookiesResponse)
+@app.post("/api/sessions/{session_id}/cookies", response_model=SetCookiesResponse, dependencies=[Depends(verify_cluster_secret)])
 async def set_cookies(session_id: str, request: SetCookiesRequest):
     """设置 Cookie"""
     try:
@@ -567,7 +576,7 @@ async def set_cookies(session_id: str, request: SetCookiesRequest):
         raise HTTPException(status_code=500, detail=f"设置失败: {str(e)}")
 
 
-@app.get("/api/sessions/{session_id}/cookies", response_model=GetCookiesResponse)
+@app.get("/api/sessions/{session_id}/cookies", response_model=GetCookiesResponse, dependencies=[Depends(verify_cluster_secret)])
 async def get_cookies(session_id: str, url: Optional[str] = None):
     """获取 Cookie"""
     try:
@@ -605,7 +614,7 @@ async def get_cookies(session_id: str, url: Optional[str] = None):
 # 实际生产环境应该使用数据库
 recorded_tasks: Dict[str, List[Dict]] = {}
 
-@app.websocket("/ws/sessions/{session_id}")
+@app.websocket("/ws/sessions/{session_id}", dependencies=[Depends(verify_cluster_secret)])
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket 远程控制接口"""
     await websocket.accept()

@@ -34,6 +34,10 @@ class BrowserRPCConfig:
     # Redis 配置
     REDIS_URL: str = 'redis://localhost:6379/0'
     
+    # 安全配置
+    CLUSTER_SECRET: str = "browser-rpc-secret-key-change-me"  # 内部通信密钥
+    API_KEY: Optional[str] = None  # 客户端访问密钥 (可选)
+
     def __init__(self):
         """从环境变量加载配置"""
         # 尝试从 .env 文件加载 (如果 python-dotenv 已安装)
