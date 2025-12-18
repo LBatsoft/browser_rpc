@@ -153,14 +153,40 @@ class BrowserSession:
             # 启动浏览器
             self.browser = await self.playwright.chromium.launch(**launch_options)
             
-            # 创建上下文
+            # 创建上下文（增强反检测配置）
+            # 使用真实的 Chrome User-Agent（如果没有提供）
+            default_user_agent = user_agent or (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            
             context_options = {
                 'viewport': {'width': width, 'height': height},
                 'bypass_csp': True,
+                'user_agent': default_user_agent,
+                # 设置更真实的 HTTP headers
+                'extra_http_headers': {
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0',
+                },
+                # 设置更真实的屏幕参数
+                'screen': {
+                    'width': width,
+                    'height': height
+                },
+                # 设置时区（中国时区）
+                'timezone_id': 'Asia/Shanghai',
+                # 设置语言
+                'locale': 'zh-CN',
             }
-            
-            if user_agent:
-                context_options['user_agent'] = user_agent
             
             if proxy:
                 context_options['proxy'] = proxy
@@ -196,6 +222,69 @@ delete Navigator.prototype.webdriver;
             # 应用 playwright-stealth 的完整反检测补丁
             await stealth_async(self.page)
 
+            # 增强反检测：额外的指纹伪装
+            await self.page.add_init_script("""
+                // Canvas 指纹随机化（添加噪声）
+                const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                HTMLCanvasElement.prototype.toDataURL = function(type) {
+                    const context = this.getContext('2d');
+                    if (context) {
+                        const imageData = context.getImageData(0, 0, this.width, this.height);
+                        for (let i = 0; i < imageData.data.length; i += 4) {
+                            // 添加微小的随机噪声（不影响视觉）
+                            imageData.data[i] += Math.random() * 0.01;
+                        }
+                        context.putImageData(imageData, 0, 0);
+                    }
+                    return originalToDataURL.apply(this, arguments);
+                };
+
+                // WebGL 指纹伪装
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) { // UNMASKED_VENDOR_WEBGL
+                        return 'Intel Inc.';
+                    }
+                    if (parameter === 37446) { // UNMASKED_RENDERER_WEBGL
+                        return 'Intel Iris OpenGL Engine';
+                    }
+                    return getParameter.apply(this, arguments);
+                };
+
+                // 完善 navigator 属性
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 8
+                });
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
+                });
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'Win32'
+                });
+
+                // 设置语言
+                Object.defineProperty(navigator, 'language', {
+                    get: () => 'zh-CN'
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['zh-CN', 'zh', 'en-US', 'en']
+                });
+
+                // 完善 screen 对象
+                Object.defineProperty(screen, 'availWidth', {
+                    get: () => window.innerWidth || 1920
+                });
+                Object.defineProperty(screen, 'availHeight', {
+                    get: () => window.innerHeight || 1080
+                });
+                Object.defineProperty(screen, 'colorDepth', {
+                    get: () => 24
+                });
+                Object.defineProperty(screen, 'pixelDepth', {
+                    get: () => 24
+                });
+            """)
+
             # 调试 webdriver 状态
             info = await self.page.evaluate("""
                 () => ({
@@ -220,12 +309,35 @@ delete Navigator.prototype.webdriver;
             raise
     
     async def navigate(self, url: str, timeout: int = 30) -> str:
-        """导航到指定 URL"""
+        """导航到指定 URL（增强反检测：添加人类行为模拟）"""
         if not self.page:
             raise RuntimeError("浏览器会话未初始化")
         
         try:
-            response = await self.page.goto(url, timeout=timeout * 1000, wait_until='domcontentloaded')
+            # 添加随机延迟，模拟人类行为（0.5-2秒）
+            import random
+            delay = random.uniform(0.5, 2.0)
+            await asyncio.sleep(delay)
+            
+            # 导航时设置更真实的 referer（如果是首次访问则没有 referer）
+            response = await self.page.goto(
+                url, 
+                timeout=timeout * 1000, 
+                wait_until='domcontentloaded',
+                referer=None  # 首次访问不设置 referer
+            )
+            
+            # 页面加载后，模拟一些人类行为（随机鼠标移动）
+            try:
+                await asyncio.sleep(random.uniform(0.3, 1.0))
+                # 随机移动鼠标到页面中心附近
+                await self.page.mouse.move(
+                    random.randint(400, 800),
+                    random.randint(300, 600)
+                )
+            except Exception as e:
+                logger.debug(f"模拟鼠标移动失败（可忽略）: {e}")
+            
             self.last_activity = time.time()
             return self.page.url
         except Exception as e:
