@@ -450,7 +450,21 @@ scroll: (${currentMetadata.scrollOffsetX}, ${currentMetadata.scrollOffsetY})
 
         function handleKeyDown(e) {
             if (e.repeat) return;
-            // 阻止一些常见快捷键，避免影响浏览器
+            
+            // 检查事件目标是否是输入框
+            const target = e.target;
+            const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+            
+            // 如果在输入框中，不阻止默认行为（除非是回车键用于发送）
+            if (isInput) {
+                // 如果需要，可以在这里处理输入框的快捷键，比如回车提交
+                if (e.key === 'Enter' && target.id === 'urlInput') {
+                    navigate();
+                }
+                return;
+            }
+
+            // 阻止一些常见快捷键，避免影响浏览器，但仅当不在输入框中时
             if (['Tab', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter'].includes(e.key)) {
                 e.preventDefault();
             }
