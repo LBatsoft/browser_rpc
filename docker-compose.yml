@@ -27,6 +27,7 @@ services:
       - MAX_SESSIONS=5
       - REDIS_URL=redis://redis:6379/0
       - CLUSTER_SECRET=dev-cluster-secret
+      - NODE_HOST=browser-node-1  # 使用容器名，Gateway 可以通过此名称访问
     volumes:
       - ./log:/app/log
     depends_on:
@@ -41,6 +42,7 @@ services:
       - MAX_SESSIONS=5
       - REDIS_URL=redis://redis:6379/0
       - CLUSTER_SECRET=dev-cluster-secret
+      - NODE_HOST=browser-node-2  # 使用容器名，Gateway 可以通过此名称访问
     volumes:
       - ./log:/app/log
     depends_on:

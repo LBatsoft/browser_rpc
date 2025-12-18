@@ -35,6 +35,88 @@ http://localhost:8000/static/remote.html
 
 > Note: By default, `API_KEY` is set to `dev-test-key`. You might need to configure headers if using the UI directly, or disable auth in `docker-compose.yml` for testing.
 
+## 🧪 Local Testing (Non-Docker)
+
+For local development and testing without Docker, you can start all services manually.
+
+### Quick Start (One Command)
+
+```bash
+python scripts/start_local_test.py
+```
+
+This script will:
+- ✅ Check and start Redis (if not running)
+- ✅ Start 2 Worker nodes (ports 8001, 8002)
+- ✅ Start Gateway (port 8000)
+- ✅ Run automatic API tests
+- ✅ Display access URLs
+
+Press `Ctrl+C` to stop all services.
+
+### Manual Setup (Step by Step)
+
+**1. Start Redis** (if not installed):
+
+```bash
+# macOS
+brew install redis
+brew services start redis
+
+# Linux
+sudo apt-get install redis-server
+sudo systemctl start redis
+```
+
+**2. Start Worker Node 1** (Terminal 1):
+
+```bash
+export HTTP_PORT=8001
+export MAX_SESSIONS=5
+export REDIS_URL=redis://localhost:6379/0
+export CLUSTER_SECRET=dev-cluster-secret
+export NODE_HOST=localhost
+python http_server.py
+```
+
+**3. Start Worker Node 2** (Terminal 2):
+
+```bash
+export HTTP_PORT=8002
+export MAX_SESSIONS=5
+export REDIS_URL=redis://localhost:6379/0
+export CLUSTER_SECRET=dev-cluster-secret
+export NODE_HOST=localhost
+python http_server.py
+```
+
+**4. Start Gateway** (Terminal 3):
+
+```bash
+export REDIS_URL=redis://localhost:6379/0
+export API_KEY=dev-test-key
+export CLUSTER_SECRET=dev-cluster-secret
+python gateway.py
+```
+
+**5. Test the Setup**:
+
+```bash
+python scripts/test_gateway_local.py
+```
+
+### Access URLs
+
+- **Gateway**: http://localhost:8000
+- **Remote Control UI**: http://localhost:8000/static/remote.html
+- **API Documentation**: http://localhost:8000/docs
+
+### Notes
+
+- For local testing, `NODE_HOST` should be set to `localhost` (not container names)
+- Ensure Redis is running before starting services
+- The script will automatically check Redis availability
+
 ## 📦 Installation (Local Development)
 
 ### 1. Install Dependencies

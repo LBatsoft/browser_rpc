@@ -45,7 +45,9 @@ async def verify_client_auth(
     api_key: str = Security(api_key_header)
 ):
     """验证客户端 API Key (支持 Header 和 Query Param)"""
+    # 如果未配置 API_KEY，则跳过验证（本地开发模式）
     if not config.API_KEY:
+        logger.debug("API_KEY not configured, skipping authentication")
         return
         
     # 1. 优先检查 Header (由 Security 自动提取，若无则 api_key 为 None)
@@ -57,8 +59,12 @@ async def verify_client_auth(
     if query_token == config.API_KEY:
         return
         
-    # 3. 验证失败
-    raise HTTPException(status_code=403, detail="Invalid API Key")
+    # 3. 验证失败 - 提供更详细的错误信息
+    logger.warning(f"API Key validation failed. Header: {api_key}, Query: {query_token}, Expected: {config.API_KEY}")
+    raise HTTPException(
+        status_code=403, 
+        detail=f"Invalid API Key. Please provide 'X-API-Key' header or 'token' query parameter. Expected: {config.API_KEY}"
+    )
 
 def get_upstream_headers(original_headers: dict = None) -> dict:
     """构造上游请求头，注入内部通信密钥"""

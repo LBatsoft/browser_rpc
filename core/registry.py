@@ -24,11 +24,32 @@ class NodeRegistry:
         self.is_running = False
         
     def _get_local_ip(self):
+        """获取本机 IP 或容器名（Docker 环境）"""
+        # 优先使用环境变量（Docker Compose 可以设置）
+        node_host = os.getenv('NODE_HOST')
+        if node_host:
+            return node_host
+        
+        # 在 Docker 环境中，尝试使用容器名（hostname）
+        # 这样 Gateway 可以通过容器名访问 Worker
         try:
-            # 获取本机IP，在Docker中这通常是容器IP
-            # 在某些网络配置下可能需要手动指定
             hostname = socket.gethostname()
-            return socket.gethostbyname(hostname)
+            # 检查是否在 Docker 中（hostname 通常是容器名）
+            # 如果 hostname 不是 localhost 或 127.0.0.1，很可能是容器名
+            if hostname and hostname not in ('localhost', '127.0.0.1'):
+                # 尝试解析，如果失败则直接使用 hostname（容器名）
+                try:
+                    ip = socket.gethostbyname(hostname)
+                    # 如果解析出的是 127.0.0.1，说明不在 Docker 网络中，使用 hostname
+                    if ip == '127.0.0.1':
+                        return hostname
+                    return ip
+                except:
+                    # 解析失败，直接使用 hostname（容器名）
+                    return hostname
+            else:
+                # 非 Docker 环境，使用 IP
+                return socket.gethostbyname(hostname) if hostname else '127.0.0.1'
         except:
             return '127.0.0.1'
 
