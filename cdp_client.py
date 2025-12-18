@@ -83,7 +83,13 @@ class NetworkInterceptor:
                             'body': body.decode('utf-8', errors='ignore')
                         }
                     except Exception as e:
-                        logger.warning(f"获取响应体失败: {e}")
+                        error_msg = str(e)
+                        if "No data found" in error_msg or "Target closed" in error_msg:
+                            # 忽略预期内的错误，使用 debug 级别
+                            logger.debug(f"获取响应体失败 (忽略): {error_msg}")
+                        else:
+                            logger.warning(f"获取响应体失败: {error_msg}")
+                            
                         req['response'] = {
                             'status_code': response.status,
                             'headers': response.headers,
@@ -107,6 +113,8 @@ class BrowserSession:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.playwright = None
+        self.cdp_session = None
+        self.screencast_listener = None
         self.network_interceptor = NetworkInterceptor()
         self.custom_headers: Dict[str, str] = {}
         self.created_at = time.time()
@@ -236,6 +244,338 @@ delete Navigator.prototype.webdriver;
         except Exception as e:
             logger.error(f"脚本执行失败: {e}")
             raise
+            
+    async def start_screencast(self, callback):
+        """开启屏幕投射"""
+        if not self.page:
+            raise RuntimeError("浏览器会话未初始化")
+        
+        try:
+            # 建立 CDP 会话
+            if not self.cdp_session:
+                self.cdp_session = await self.context.new_cdp_session(self.page)
+            
+            # 清理旧的监听器
+            if self.screencast_listener:
+                self.cdp_session.remove_listener("Page.screencastFrame", self.screencast_listener)
+                self.screencast_listener = None
+
+            # 监听 screencast 帧
+            async def on_screencast_frame(frame):
+                try:
+                    # frame 包含 data (base64), sessionId, metadata
+                    # 调用回调函数发送给 WebSocket
+                    if callback:
+                        await callback(frame['data'], frame['metadata'])
+                    
+                    # 必须确认帧，否则流会停止
+                    # 注意：必须使用 frame 中的 sessionId 确认，因为这可能是来自非主页面的帧（如果支持）
+                    # 但 Page.screencastFrameAck 需要在开启 screencast 的 session 上发送
+                    if self.cdp_session:
+                        await self.cdp_session.send("Page.screencastFrameAck", {"sessionId": frame['sessionId']})
+                except Exception as e:
+                    logger.error(f"Screencast frame error: {e}")
+
+            # 保存并添加新监听器
+            self.screencast_listener = on_screencast_frame
+            self.cdp_session.on("Page.screencastFrame", self.screencast_listener)
+            
+            # 开启投射
+            await self.cdp_session.send("Page.startScreencast", {
+                "format": "jpeg",
+                "quality": 80,
+                "maxWidth": 1280, # 限制最大宽度，减少传输量
+                "maxHeight": 720, # 限制最大高度
+                "everyNthFrame": 1
+            })
+            logger.info(f"Screencast started for session {self.session_id}")
+            
+            # 监听新页面
+            self.context.on("page", self._on_new_page)
+            
+        except Exception as e:
+            logger.error(f"Start screencast failed: {e}")
+            raise
+
+    async def _on_new_page(self, page: Page):
+        """处理新页面创建"""
+        try:
+            logger.info(f"New page detected: {page.url}")
+            await page.wait_for_load_state()
+            
+            # 更新当前页面引用
+            old_page = self.page
+            self.page = page
+            
+            # 重新应用 stealth
+            await stealth_async(self.page)
+            
+            # 更新网络拦截
+            self.page.on('request', self.network_interceptor.on_request)
+            self.page.on('response', self.network_interceptor.on_response)
+            
+            # 切换 CDP 会话到新页面
+            # 1. 停止旧页面的 screencast
+            if self.cdp_session:
+                try:
+                    await self.cdp_session.send("Page.stopScreencast")
+                    if self.screencast_listener:
+                        self.cdp_session.remove_listener("Page.screencastFrame", self.screencast_listener)
+                except Exception as e:
+                    logger.warning(f"Failed to stop old screencast: {e}")
+            
+            # 2. 创建新 CDP 会话
+            self.cdp_session = await self.context.new_cdp_session(self.page)
+            
+            # 3. 重新绑定监听器并开启 screencast
+            if self.screencast_listener:
+                self.cdp_session.on("Page.screencastFrame", self.screencast_listener)
+                await self.cdp_session.send("Page.startScreencast", {
+                    "format": "jpeg",
+                    "quality": 80,
+                    "maxWidth": 1280,
+                    "maxHeight": 720,
+                    "everyNthFrame": 1
+                })
+                logger.info(f"Screencast switched to new page: {page.url}")
+            
+            # 通知前端更新标签页
+            # 这里需要一种机制通知 WebSocket，目前通过简单的日志或者回调扩展实现
+            # 由于没有直接的 ws 引用，这里先依靠前端轮询或后端主动推送（如果设计支持）
+            # 暂时只能自动切换，前端看到的会变，但列表没变
+                
+        except Exception as e:
+            logger.error(f"Failed to switch to new page: {e}")
+
+    async def get_pages(self) -> List[Dict[str, str]]:
+        """获取所有页面信息"""
+        if not self.context:
+            return []
+        
+        pages = []
+        for p in self.context.pages:
+            try:
+                title = await p.title()
+            except:
+                title = "Loading..."
+            
+            # 使用 id 作为唯一标识，playwright page 没有公开 id，可以用 guid
+            # 这里简单用索引或对象哈希，或者给 page 附加上 id
+            if not hasattr(p, '_guid'):
+                p._guid = str(uuid.uuid4())
+                
+            pages.append({
+                'id': p._guid,
+                'url': p.url,
+                'title': title
+            })
+        return pages
+
+    async def switch_to_page(self, page_id: str):
+        """切换到指定页面"""
+        if not self.context:
+            return
+            
+        target_page = None
+        for p in self.context.pages:
+            if hasattr(p, '_guid') and p._guid == page_id:
+                target_page = p
+                break
+        
+        if target_page and target_page != self.page:
+            logger.info(f"Switching to page {page_id}")
+            await self._on_new_page(target_page)
+
+    async def stop_screencast(self):
+        """停止屏幕投射"""
+        try:
+            # 移除页面监听
+            if self.context:
+                self.context.remove_listener("page", self._on_new_page)
+
+            if self.cdp_session:
+                await self.cdp_session.send("Page.stopScreencast")
+                
+                # 移除监听器
+                if self.screencast_listener:
+                    self.cdp_session.remove_listener("Page.screencastFrame", self.screencast_listener)
+                    self.screencast_listener = None
+                    
+            logger.info(f"Screencast stopped for session {self.session_id}")
+        except Exception as e:
+            logger.error(f"Stop screencast failed: {e}")
+
+    async def handle_input_event(self, event: Dict[str, Any]):
+        """处理输入事件 - 使用 CDP 原生方法"""
+        if not self.page:
+            return
+
+        try:
+            event_type = event.get('type')
+            x = event.get('x', 0)
+            y = event.get('y', 0)
+            
+            # 确保 CDP session 存在
+            if not self.cdp_session:
+                self.cdp_session = await self.context.new_cdp_session(self.page)
+            
+            if event_type == 'mousemove':
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseMoved",
+                    "x": x,
+                    "y": y,
+                    "modifiers": event.get('modifiers', 0)
+                })
+                
+            elif event_type == 'mousedown':
+                button = event.get('button', 'left')
+                cdp_button = {'left': 'left', 'middle': 'middle', 'right': 'right'}.get(button, 'left')
+                buttons = {'left': 1, 'middle': 4, 'right': 2}.get(button, 1)
+                
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": buttons,
+                    "clickCount": 1,
+                    "modifiers": event.get('modifiers', 0)
+                })
+                
+            elif event_type == 'mouseup':
+                button = event.get('button', 'left')
+                cdp_button = {'left': 'left', 'middle': 'middle', 'right': 'right'}.get(button, 'left')
+                
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": 0,
+                    "clickCount": 1,
+                    "modifiers": event.get('modifiers', 0)
+                })
+                
+            elif event_type == 'click':
+                # Click is a sequence, we should respect modifiers for all
+                button = event.get('button', 'left')
+                cdp_button = {'left': 'left', 'middle': 'middle', 'right': 'right'}.get(button, 'left')
+                buttons = {'left': 1, 'middle': 4, 'right': 2}.get(button, 1)
+                modifiers = event.get('modifiers', 0)
+                
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseMoved",
+                    "x": x,
+                    "y": y,
+                    "modifiers": modifiers
+                })
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": buttons,
+                    "clickCount": 1,
+                    "modifiers": modifiers
+                })
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": cdp_button,
+                    "buttons": 0,
+                    "clickCount": 1,
+                    "modifiers": modifiers
+                })
+                
+            elif event_type == 'keydown':
+                params = {
+                    "type": "keyDown",
+                    "key": event.get('key', ''),
+                    "code": event.get('code', ''),
+                    "modifiers": event.get('modifiers', 0),
+                    "windowsVirtualKeyCode": event.get('windowsVirtualKeyCode', 0),
+                    "nativeVirtualKeyCode": event.get('nativeVirtualKeyCode', 0),
+                    "location": event.get('location', 0),
+                    "autoRepeat": False,  # We filter repeats in frontend
+                    "isKeypad": event.get('location', 0) == 3
+                }
+                
+                key = event.get('key', '')
+                if len(key) == 1:
+                    params["text"] = key
+                    params["unmodifiedText"] = key
+                
+                if event.get('commands'): # Optional if we support it later
+                    params['commands'] = event.get('commands')
+                    
+                await self.cdp_session.send("Input.dispatchKeyEvent", params)
+                
+            elif event_type == 'keyup':
+                await self.cdp_session.send("Input.dispatchKeyEvent", {
+                    "type": "keyUp",
+                    "key": event.get('key', ''),
+                    "code": event.get('code', ''),
+                    "modifiers": event.get('modifiers', 0),
+                    "location": event.get('location', 0)
+                })
+                
+            elif event_type == 'keypress':
+                key = event.get('key', '')
+                if key:
+                    await self.cdp_session.send("Input.dispatchKeyEvent", {
+                        "type": "keyDown",
+                        "key": key,
+                        "text": key if len(key) == 1 else ""
+                    })
+                    await self.cdp_session.send("Input.dispatchKeyEvent", {
+                        "type": "keyUp",
+                        "key": key
+                    })
+                
+            elif event_type == 'scroll':
+                deltaX = event.get('deltaX', 0)
+                deltaY = event.get('deltaY', 0)
+                await self.cdp_session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseWheel",
+                    "x": x,
+                    "y": y,
+                    "deltaX": deltaX,
+                    "deltaY": deltaY,
+                    "modifiers": event.get('modifiers', 0)
+                })
+                
+            self.last_activity = time.time()
+            
+        except Exception as e:
+            logger.error(f"Handle input event failed: {e}, Event: {event}")
+
+    async def replay_events(self, events: List[dict]):
+        """重放事件序列"""
+        if not events: return
+        
+        logger.info(f"开始重放任务，共 {len(events)} 个事件")
+        start_time = events[0].get('timestamp', 0)
+        
+        # 为了保证重放的准确性，使用相对时间
+        for i, event in enumerate(events):
+            try:
+                # 计算需要等待的时间
+                if i > 0:
+                    prev_time = events[i-1].get('timestamp', 0)
+                    curr_time = event.get('timestamp', 0)
+                    delay = curr_time - prev_time
+                    # 如果间隔太大（比如超过5秒），可能是在思考，可以适当缩短或者按原样等待
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                
+                # 执行操作
+                await self.handle_input_event(event)
+            except Exception as e:
+                logger.error(f"重放事件失败: {e}, index: {i}")
+        
+        logger.info("任务重放完成")
+
     
     async def get_content(self) -> str:
         """获取页面内容"""

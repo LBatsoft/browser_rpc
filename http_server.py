@@ -10,11 +10,15 @@ import logging
 import sys
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cdp_client import BrowserPool
+from core.registry import NodeRegistry
+import time
+import os
 
 # 配置日志
 import os
@@ -37,8 +41,23 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# 挂载静态文件
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
 # 全局浏览器池
 browser_pool: Optional[BrowserPool] = None
+node_registry: Optional[NodeRegistry] = None
+
+
+async def verify_cluster_secret(x_cluster_secret: Optional[str] = Header(None, alias="X-Cluster-Secret")):
+    """验证内部集群通信密钥"""
+    from config import get_config
+    config = get_config()
+    if config.CLUSTER_SECRET:
+         if x_cluster_secret != config.CLUSTER_SECRET:
+             raise HTTPException(status_code=403, detail="Invalid Cluster Secret")
 
 
 # Pydantic 模型定义
@@ -199,21 +218,33 @@ def get_session(session_id: str):
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时初始化浏览器池"""
-    global browser_pool
+    """应用启动时初始化浏览器池和注册节点"""
+    global browser_pool, node_registry
     from config import get_config
     config = get_config()
     browser_pool = BrowserPool(config.MAX_SESSIONS, config.SESSION_TIMEOUT)
     logger.info(f"HTTP 服务器启动完成 (最大会话数: {config.MAX_SESSIONS})")
+    
+    # 初始化节点注册
+    if config.REDIS_URL:
+        try:
+            node_registry = NodeRegistry(config.REDIS_URL)
+            await node_registry.register_node()
+            logger.info("节点注册成功")
+        except Exception as e:
+            logger.error(f"节点注册失败: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """应用关闭时清理浏览器池"""
-    global browser_pool
+    """应用关闭时清理"""
+    global browser_pool, node_registry
     if browser_pool:
-        await browser_pool.cleanup()
+        await browser_pool.close_all()
         logger.info("浏览器池已清理")
+    
+    if node_registry:
+        await node_registry.close()
 
 
 @app.get("/")
@@ -226,7 +257,7 @@ async def root():
     }
 
 
-@app.post("/api/sessions", response_model=CreateSessionResponse)
+@app.post("/api/sessions", response_model=CreateSessionResponse, dependencies=[Depends(verify_cluster_secret)])
 async def create_session(request: CreateSessionRequest):
     """创建浏览器会话"""
     try:
@@ -242,6 +273,12 @@ async def create_session(request: CreateSessionRequest):
             height=request.height
         )
         
+        # 更新负载信息
+        if node_registry:
+            await node_registry.update_load(len(browser_pool.sessions))
+            # 注册会话路由
+            await node_registry.register_session(session_id, node_registry.node_id)
+        
         logger.info(f"创建会话成功: {session_id}")
         return CreateSessionResponse(
             session_id=session_id,
@@ -253,11 +290,16 @@ async def create_session(request: CreateSessionRequest):
         raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
 
 
-@app.delete("/api/sessions/{session_id}", response_model=CloseSessionResponse)
+@app.delete("/api/sessions/{session_id}", response_model=CloseSessionResponse, dependencies=[Depends(verify_cluster_secret)])
 async def close_session(session_id: str):
     """关闭浏览器会话"""
     try:
         success = await browser_pool.close_session(session_id)
+        
+        # 更新负载信息
+        if node_registry:
+            await node_registry.update_load(len(browser_pool.sessions))
+            
         if success:
             logger.info(f"关闭会话成功: {session_id}")
             return CloseSessionResponse(
@@ -273,7 +315,7 @@ async def close_session(session_id: str):
         raise HTTPException(status_code=500, detail=f"关闭会话失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/navigate", response_model=NavigateResponse)
+@app.post("/api/sessions/{session_id}/navigate", response_model=NavigateResponse, dependencies=[Depends(verify_cluster_secret)])
 async def navigate(session_id: str, request: NavigateRequest):
     """导航到指定 URL"""
     try:
@@ -293,7 +335,7 @@ async def navigate(session_id: str, request: NavigateRequest):
         raise HTTPException(status_code=500, detail=f"导航失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/execute", response_model=ExecuteScriptResponse)
+@app.post("/api/sessions/{session_id}/execute", response_model=ExecuteScriptResponse, dependencies=[Depends(verify_cluster_secret)])
 async def execute_script(session_id: str, request: ExecuteScriptRequest):
     """执行 JavaScript"""
     try:
@@ -315,7 +357,7 @@ async def execute_script(session_id: str, request: ExecuteScriptRequest):
         )
 
 
-@app.get("/api/sessions/{session_id}/content", response_model=GetPageContentResponse)
+@app.get("/api/sessions/{session_id}/content", response_model=GetPageContentResponse, dependencies=[Depends(verify_cluster_secret)])
 async def get_page_content(session_id: str):
     """获取页面内容"""
     try:
@@ -335,7 +377,7 @@ async def get_page_content(session_id: str):
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/network", response_model=GetNetworkRequestsResponse)
+@app.post("/api/sessions/{session_id}/network", response_model=GetNetworkRequestsResponse, dependencies=[Depends(verify_cluster_secret)])
 async def get_network_requests(session_id: str, request: GetNetworkRequestsRequest):
     """获取拦截的网络请求"""
     try:
@@ -371,7 +413,7 @@ async def get_network_requests(session_id: str, request: GetNetworkRequestsReque
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/wait", response_model=WaitForElementResponse)
+@app.post("/api/sessions/{session_id}/wait", response_model=WaitForElementResponse, dependencies=[Depends(verify_cluster_secret)])
 async def wait_for_element(session_id: str, request: WaitForElementRequest):
     """等待元素出现"""
     try:
@@ -390,7 +432,7 @@ async def wait_for_element(session_id: str, request: WaitForElementRequest):
         raise HTTPException(status_code=500, detail=f"等待失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/click", response_model=ClickElementResponse)
+@app.post("/api/sessions/{session_id}/click", response_model=ClickElementResponse, dependencies=[Depends(verify_cluster_secret)])
 async def click_element(session_id: str, request: ClickElementRequest):
     """点击元素"""
     try:
@@ -409,7 +451,7 @@ async def click_element(session_id: str, request: ClickElementRequest):
         raise HTTPException(status_code=500, detail=f"点击失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/type", response_model=TypeTextResponse)
+@app.post("/api/sessions/{session_id}/type", response_model=TypeTextResponse, dependencies=[Depends(verify_cluster_secret)])
 async def type_text(session_id: str, request: TypeTextRequest):
     """输入文本"""
     try:
@@ -428,7 +470,7 @@ async def type_text(session_id: str, request: TypeTextRequest):
         raise HTTPException(status_code=500, detail=f"输入失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/screenshot", response_model=TakeScreenshotResponse)
+@app.post("/api/sessions/{session_id}/screenshot", response_model=TakeScreenshotResponse, dependencies=[Depends(verify_cluster_secret)])
 async def take_screenshot(session_id: str, request: TakeScreenshotRequest):
     """页面截图"""
     try:
@@ -454,7 +496,7 @@ async def take_screenshot(session_id: str, request: TakeScreenshotRequest):
         raise HTTPException(status_code=500, detail=f"截图失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/headers", response_model=SetHeadersResponse)
+@app.post("/api/sessions/{session_id}/headers", response_model=SetHeadersResponse, dependencies=[Depends(verify_cluster_secret)])
 async def set_headers(session_id: str, request: SetHeadersRequest):
     """设置请求头"""
     try:
@@ -473,7 +515,7 @@ async def set_headers(session_id: str, request: SetHeadersRequest):
         raise HTTPException(status_code=500, detail=f"设置失败: {str(e)}")
 
 
-@app.post("/api/sessions/{session_id}/cookies", response_model=SetCookiesResponse)
+@app.post("/api/sessions/{session_id}/cookies", response_model=SetCookiesResponse, dependencies=[Depends(verify_cluster_secret)])
 async def set_cookies(session_id: str, request: SetCookiesRequest):
     """设置 Cookie"""
     try:
@@ -534,7 +576,7 @@ async def set_cookies(session_id: str, request: SetCookiesRequest):
         raise HTTPException(status_code=500, detail=f"设置失败: {str(e)}")
 
 
-@app.get("/api/sessions/{session_id}/cookies", response_model=GetCookiesResponse)
+@app.get("/api/sessions/{session_id}/cookies", response_model=GetCookiesResponse, dependencies=[Depends(verify_cluster_secret)])
 async def get_cookies(session_id: str, url: Optional[str] = None):
     """获取 Cookie"""
     try:
@@ -566,6 +608,153 @@ async def get_cookies(session_id: str, url: Optional[str] = None):
     except Exception as e:
         logger.error(f"获取 Cookie 失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+# 简单的任务存储 (内存中)
+# 实际生产环境应该使用数据库
+recorded_tasks: Dict[str, List[Dict]] = {}
+
+@app.websocket("/ws/sessions/{session_id}", dependencies=[Depends(verify_cluster_secret)])
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """WebSocket 远程控制接口"""
+    await websocket.accept()
+    
+    try:
+        # 获取会话 (不使用 get_session 包装器，避免 HTTPException)
+        session = browser_pool.get_session(session_id)
+        if not session:
+            await websocket.close(code=4004, reason="Session not found")
+            return
+
+        # 录制状态
+        is_recording = False
+        current_recording = []
+        
+        # 定义发送帧的回调
+        async def send_frame(data, metadata):
+            try:
+                # 顺便检查是否有新标签页，如果有，推送列表
+                # 这是一个简化的做法，理想情况是基于事件
+                # 为了性能，每 60 帧 (约1秒) 检查一次
+                nonlocal frame_counter
+                frame_counter += 1
+                if frame_counter % 60 == 0:
+                    pages = await session.get_pages()
+                    if pages:
+                        active_id = getattr(session.page, '_guid', None)
+                        await websocket.send_json({
+                            "type": "tabs",
+                            "tabs": pages,
+                            "activeId": active_id
+                        })
+
+                await websocket.send_json({
+                    "type": "frame",
+                    "data": data,
+                    "metadata": metadata
+                })
+            except Exception as e:
+                logger.error(f"WebSocket send frame error: {e}")
+                # 连接断开时可能会报错，这里暂时忽略
+
+        try:
+            frame_counter = 0
+            # 开启投射
+            await session.start_screencast(send_frame)
+            logger.info(f"WebSocket connected for session {session_id}")
+            
+            # 初始发送一次标签页列表
+            pages = await session.get_pages()
+            active_id = getattr(session.page, '_guid', None)
+            await websocket.send_json({
+                "type": "tabs",
+                "tabs": pages,
+                "activeId": active_id
+            })
+            
+            while True:
+                # 接收前端指令
+                data = await websocket.receive_json()
+                msg_type = data.get('type')
+                
+                if msg_type == 'input':
+                    # 执行操作
+                    event = data.get('event', {})
+                    await session.handle_input_event(event)
+                    
+                    # 录制
+                    if is_recording:
+                        event_record = event.copy()
+                        event_record['timestamp'] = time.time()
+                        current_recording.append(event_record)
+                        
+                elif msg_type == 'control':
+                    cmd = data.get('command')
+                    if cmd == 'start_record':
+                        is_recording = True
+                        current_recording = []
+                        logger.info(f"Session {session_id} started recording")
+                        await websocket.send_json({"type": "status", "message": "Recording started"})
+                        
+                    elif cmd == 'stop_record':
+                        is_recording = False
+                        task_name = data.get('taskName', f"task_{int(time.time())}")
+                        recorded_tasks[task_name] = current_recording
+                        logger.info(f"Session {session_id} stopped recording, saved as {task_name}")
+                        await websocket.send_json({
+                            "type": "status", 
+                            "message": f"Recording saved as {task_name}",
+                            "taskName": task_name,
+                            "eventCount": len(current_recording)
+                        })
+                        
+                    elif cmd == 'replay':
+                        task_name = data.get('taskName')
+                        if task_name in recorded_tasks:
+                            logger.info(f"Session {session_id} replaying task {task_name}")
+                            await websocket.send_json({"type": "status", "message": f"Replaying {task_name}..."})
+                            # 异步执行重放，避免阻塞 WebSocket 接收循环
+                            asyncio.create_task(session.replay_events(recorded_tasks[task_name]))
+                        else:
+                            await websocket.send_json({"type": "error", "message": f"Task {task_name} not found"})
+                    
+                    elif cmd == 'switch_tab':
+                        tab_id = data.get('tabId')
+                        if tab_id:
+                            await session.switch_to_page(tab_id)
+                            # 切换后发送新的标签页列表
+                            pages = await session.get_pages()
+                            active_id = getattr(session.page, '_guid', None)
+                            await websocket.send_json({
+                                "type": "tabs",
+                                "tabs": pages,
+                                "activeId": active_id
+                            })
+
+                elif msg_type == 'ping':
+                    await websocket.send_json({"type": "pong"})
+            
+            # 定时推送标签页信息 (简单的轮询机制，或者在 screencast 帧中附带)
+            # 在这里我们无法轻松插入循环，只能依赖前端交互或事件触发
+            # 改进：修改 _on_new_page 回调机制，允许传入 callback
+
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected for session {session_id}")
+        except Exception as e:
+            logger.error(f"WebSocket loop error: {e}")
+        finally:
+            # 停止投射
+            try:
+                await session.stop_screencast()
+            except:
+                pass
+
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {e}")
+        try:
+            await websocket.close(code=1011)
+        except:
+            pass
 
 
 if __name__ == "__main__":

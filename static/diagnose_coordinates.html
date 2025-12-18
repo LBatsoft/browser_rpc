@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>坐标诊断工具</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        #screen { border: 2px solid red; }
+        pre { background: #f0f0f0; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h2>远程控制坐标诊断</h2>
+    <div>
+        <label>Session ID: <input type="text" id="sessionId" value="d5d62df3-3d4c-4c88-9d6d-a9620aa748eb" style="width: 400px;"></label>
+        <button onclick="connect()">连接</button>
+    </div>
+    <br>
+    <div id="info">
+        <pre id="output">等待连接...</pre>
+    </div>
+    <br>
+    <img id="screen" alt="Remote Screen">
+    
+    <script>
+        let ws;
+        const screen = document.getElementById('screen');
+        const output = document.getElementById('output');
+        let currentMetadata = null;
+        
+        function log(msg) {
+            output.textContent += msg + '\n';
+        }
+        
+        function connect() {
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const wsUrl = `ws://localhost:8000/ws/sessions/${sessionId}`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                output.textContent = '';
+                log('✅ WebSocket 已连接');
+            };
+            
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                
+                if (msg.type === 'frame') {
+                    const newSrc = 'data:image/jpeg;base64,' + msg.data;
+                    
+                    if (msg.metadata) {
+                        currentMetadata = msg.metadata;
+                    }
+                    
+                    if (screen.src !== newSrc) {
+                        screen.onload = () => {
+                            log('\n=== 坐标信息 ===');
+                            log(`CDP Metadata:`);
+                            log(`  deviceWidth: ${currentMetadata.deviceWidth}`);
+                            log(`  deviceHeight: ${currentMetadata.deviceHeight}`);
+                            log(`  pageScaleFactor: ${currentMetadata.pageScaleFactor}`);
+                            log(`  deviceScaleFactor: ${currentMetadata.deviceScaleFactor || '(不存在)'}`);
+                            log(``);
+                            log(`图片信息:`);
+                            log(`  naturalWidth: ${screen.naturalWidth}`);
+                            log(`  naturalHeight: ${screen.naturalHeight}`);
+                            log(`  clientWidth: ${screen.clientWidth}`);
+                            log(`  clientHeight: ${screen.clientHeight}`);
+                            log(``);
+                            log(`计算:`);
+                            log(`  displayScale: ${screen.naturalWidth / screen.clientWidth}`);
+                            log(`  naturalWidth / deviceWidth: ${screen.naturalWidth / currentMetadata.deviceWidth}`);
+                            log(``);
+                            log(`window.devicePixelRatio: ${window.devicePixelRatio}`);
+                        };
+                        screen.src = newSrc;
+                    }
+                }
+            };
+            
+            // 点击时显示坐标信息
+            screen.addEventListener('click', (e) => {
+                const rect = screen.getBoundingClientRect();
+                
+                let displayScale = 1;
+                if (screen.naturalWidth && screen.clientWidth) {
+                    displayScale = screen.naturalWidth / screen.clientWidth;
+                }
+                
+                const x = (e.clientX - rect.left) * displayScale;
+                const y = (e.clientY - rect.top) * displayScale;
+                
+                log('\n=== 点击事件 ===');
+                log(`浏览器坐标: (${e.clientX}, ${e.clientY})`);
+                log(`相对图片: (${e.clientX - rect.left}, ${e.clientY - rect.top})`);
+                log(`缩放后: (${x}, ${y})`);
+                log(`deviceWidth 比例坐标: (${x * currentMetadata.deviceWidth / screen.naturalWidth}, ${y * currentMetadata.deviceHeight / screen.naturalHeight})`);
+            });
+        }
+    </script>
+</body>
+</html>
