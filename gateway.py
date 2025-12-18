@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import asyncio  # Added missing import
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, Security, Depends
