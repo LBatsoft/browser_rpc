@@ -8,10 +8,13 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 # 安装系统依赖 (手动列出 Chromium 所需依赖，适配 Debian)
+# 新增: fonts-noto-cjk fonts-wqy-zenhei 用于支持中文显示
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     fonts-liberation \
+    fonts-noto-cjk \
+    fonts-wqy-zenhei \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
