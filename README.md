@@ -4,15 +4,21 @@
 
 [![CI](https://github.com/LBatsoft/browser_rpc/actions/workflows/ci.yml/badge.svg)](https://github.com/LBatsoft/browser_rpc/actions/workflows/ci.yml)
 
-## ✨ Features
+## ✨ Core Features
 
+**核心能力 - Browser RPC 服务**:
+- 🔌 **gRPC Interface**: 13 standardized RPC APIs for browser automation
 - 🛡️ **Powerful Anti-Detection**: playwright-stealth + custom scripts to bypass common bot detection
+- 📡 **Network Interception**: Complete request/response capture capabilities
+- 🚀 **High Performance**: Multi-session concurrency with resource pool management
+- 🎯 **Full Browser Control**: Navigate, execute scripts, interact with elements, take screenshots
+
+**扩展功能（可选）**:
 - 🔌 **Unified Gateway**: Distributed architecture with Gateway as single entry point (Load Balancing & Routing)
 - 🐳 **Docker Ready**: One-click deployment with Docker Compose
 - 🖥️ **Remote Control UI**: Real-time browser remote control with multi-tab support
-- 📡 **Network Interception**: Complete request/response capture capabilities
-- 🚀 **High Performance**: Supports multi-session concurrency with resource pool management
 - 🔒 **Security**: API Key authentication for clients + Cluster Secret for internal communication
+- 📊 **Monitoring**: Prometheus metrics and Grafana dashboards
 
 ## 🚀 Quick Start (Docker) - Recommended
 
@@ -139,9 +145,80 @@ playwright install chromium
 
 ## 💻 Usage
 
-### HTTP API (via Gateway)
+### Core: gRPC RPC Interface (Recommended)
 
-The system provides a RESTful API via the Gateway (Default port: 8000).
+**This is the core of Browser RPC** - High-performance gRPC interface for browser automation.
+
+#### Basic Python Example (RPC)
+
+```python
+import asyncio
+from rpc_client import BrowserRPCClient
+
+async def main():
+    # Connect to RPC server
+    client = BrowserRPCClient(host='localhost', port=50051)
+    await client.connect()
+    
+    try:
+        # 1. Create Session
+        session_id = await client.create_session(
+            headless=True,
+            user_agent="Mozilla/5.0...",
+            width=1920,
+            height=1080
+        )
+        print(f"Session Created: {session_id}")
+        
+        # 2. Navigate
+        final_url = await client.navigate('https://www.example.com', timeout=30)
+        print(f"Navigated to: {final_url}")
+        
+        # 3. Execute JavaScript
+        title = await client.execute_script("document.title")
+        print(f"Page Title: {title}")
+        
+        # 4. Get Page Content
+        html = await client.get_page_content()
+        print(f"Page HTML: {len(html)} bytes")
+        
+        # 5. Network Interception
+        requests = await client.get_network_requests(url_pattern=r'/api/.*')
+        print(f"Captured {len(requests)} API requests")
+        
+        # 6. Element Operations
+        await client.wait_for_element('button#submit', timeout=10)
+        await client.click_element('button#submit')
+        await client.type_text('input#username', 'myname')
+        
+        # 7. Screenshot
+        image_data = await client.take_screenshot(full_page=True)
+        with open('screenshot.png', 'wb') as f:
+            f.write(image_data)
+        
+    finally:
+        await client.close()
+
+asyncio.run(main())
+```
+
+#### Start RPC Server
+
+```bash
+# Start RPC server (default port: 50051)
+python rpc_server.py
+
+# Or use script
+./scripts/start_rpc_server.sh
+```
+
+**📚 See [Core Features Documentation](./docs/CORE_FEATURES.md) for detailed RPC API reference.**
+
+> **Note**: The core of Browser RPC is the **gRPC RPC service**. HTTP API and Gateway are optional enhancements for easier integration. For best performance, use the gRPC interface directly.
+
+### HTTP API (via Gateway) - Optional
+
+The system also provides a RESTful API via the Gateway (Default port: 8000) for easier integration.
 
 **Authentication Headers:**
 - `X-API-Key`: `dev-test-key` (Default in docker-compose.yml)

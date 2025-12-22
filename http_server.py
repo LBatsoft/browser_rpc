@@ -17,11 +17,15 @@ from pydantic import BaseModel, Field
 
 from cdp_client import BrowserPool
 from core.registry import NodeRegistry
+from core.metrics import (
+    worker_requests_total, worker_request_duration_seconds,
+    worker_active_sessions, worker_session_operations_total,
+    get_metrics, get_metrics_content_type
+)
 import time
 import os
 
 # 配置日志
-import os
 log_dir = os.path.join(os.path.dirname(__file__), 'log')
 os.makedirs(log_dir, exist_ok=True)
 logging.basicConfig(
@@ -257,9 +261,25 @@ async def root():
     }
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus 指标端点"""
+    # 更新活跃会话数
+    if browser_pool and node_registry:
+        active_count = len(browser_pool.sessions)
+        worker_active_sessions.labels(node_id=node_registry.node_id).set(active_count)
+    
+    from fastapi.responses import Response
+    return Response(
+        content=get_metrics(),
+        media_type=get_metrics_content_type()
+    )
+
+
 @app.post("/api/sessions", response_model=CreateSessionResponse, dependencies=[Depends(verify_cluster_secret)])
 async def create_session(request: CreateSessionRequest):
     """创建浏览器会话"""
+    start_time = time.time()
     try:
         proxy = None
         if request.proxy:
@@ -275,9 +295,18 @@ async def create_session(request: CreateSessionRequest):
         
         # 更新负载信息
         if node_registry:
-            await node_registry.update_load(len(browser_pool.sessions))
+            active_count = len(browser_pool.sessions)
+            await node_registry.update_load(active_count)
             # 注册会话路由
             await node_registry.register_session(session_id, node_registry.node_id)
+            # 更新指标
+            worker_active_sessions.labels(node_id=node_registry.node_id).set(active_count)
+        
+        # 记录指标
+        duration = time.time() - start_time
+        worker_request_duration_seconds.labels(method='POST', endpoint='/api/sessions').observe(duration)
+        worker_requests_total.labels(method='POST', endpoint='/api/sessions', status='success').inc()
+        worker_session_operations_total.labels(operation='create', status='success').inc()
         
         logger.info(f"创建会话成功: {session_id}")
         return CreateSessionResponse(
@@ -287,31 +316,52 @@ async def create_session(request: CreateSessionRequest):
         )
     except Exception as e:
         logger.error(f"创建会话失败: {e}")
+        # 记录错误指标
+        duration = time.time() - start_time
+        worker_request_duration_seconds.labels(method='POST', endpoint='/api/sessions').observe(duration)
+        worker_requests_total.labels(method='POST', endpoint='/api/sessions', status='error').inc()
+        worker_session_operations_total.labels(operation='create', status='error').inc()
         raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
 
 
 @app.delete("/api/sessions/{session_id}", response_model=CloseSessionResponse, dependencies=[Depends(verify_cluster_secret)])
 async def close_session(session_id: str):
     """关闭浏览器会话"""
+    start_time = time.time()
     try:
         success = await browser_pool.close_session(session_id)
         
         # 更新负载信息
         if node_registry:
-            await node_registry.update_load(len(browser_pool.sessions))
-            
+            active_count = len(browser_pool.sessions)
+            await node_registry.update_load(active_count)
+            # 更新指标
+            worker_active_sessions.labels(node_id=node_registry.node_id).set(active_count)
+        
+        # 记录指标
+        duration = time.time() - start_time
+        worker_request_duration_seconds.labels(method='DELETE', endpoint='/api/sessions/{session_id}').observe(duration)
+        
         if success:
+            worker_requests_total.labels(method='DELETE', endpoint='/api/sessions/{session_id}', status='success').inc()
+            worker_session_operations_total.labels(operation='close', status='success').inc()
             logger.info(f"关闭会话成功: {session_id}")
             return CloseSessionResponse(
                 success=True,
                 message="会话关闭成功"
             )
         else:
+            worker_requests_total.labels(method='DELETE', endpoint='/api/sessions/{session_id}', status='not_found').inc()
+            worker_session_operations_total.labels(operation='close', status='not_found').inc()
             raise HTTPException(status_code=404, detail="会话不存在")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"关闭会话失败: {e}")
+        duration = time.time() - start_time
+        worker_request_duration_seconds.labels(method='DELETE', endpoint='/api/sessions/{session_id}').observe(duration)
+        worker_requests_total.labels(method='DELETE', endpoint='/api/sessions/{session_id}', status='error').inc()
+        worker_session_operations_total.labels(operation='close', status='error').inc()
         raise HTTPException(status_code=500, detail=f"关闭会话失败: {str(e)}")
 
 

@@ -7,6 +7,9 @@ __pycache__/
 venv/
 env/
 ENV/
+*.egg-info/
+dist/
+build/
 
 # gRPC 生成的文件
 *_pb2.py
@@ -19,6 +22,7 @@ log/
 
 # 环境配置
 .env
+.env.local
 
 # 截图和临时文件
 *.png
@@ -27,6 +31,7 @@ log/
 *.gif
 screenshots/
 temp/
+*.tmp
 
 # IDE
 .vscode/
@@ -34,14 +39,32 @@ temp/
 *.swp
 *.swo
 *~
+.project
+.classpath
+.settings/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Playwright
 .playwright/
 playwright-report/
 test-results/
 
+# Docker
+.dockerignore
 
+# 监控数据
+prometheus_data/
+grafana_data/
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 其他
+*.bak
+*.orig

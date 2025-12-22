@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'browser-rpc'
+    environment: 'development'
+
+scrape_configs:
+  # Gateway 指标
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8000']
+    metrics_path: '/metrics'
+
+  # Worker 节点指标
+  - job_name: 'worker'
+    static_configs:
+      - targets: 
+          - 'browser-node-1:8001'
+          - 'browser-node-2:8002'
+    metrics_path: '/metrics'
+
+  # Prometheus 自身指标
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+

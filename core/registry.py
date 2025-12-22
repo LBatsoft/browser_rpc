@@ -21,6 +21,9 @@ class NodeRegistry:
         self.host = self._get_local_ip()
         self.port = int(os.getenv('HTTP_PORT', 8000))
         self.max_sessions = int(os.getenv('MAX_SESSIONS', 10))
+        # 地域信息（可选）
+        self.region = os.getenv('NODE_REGION', 'default')
+        self.zone = os.getenv('NODE_ZONE', 'default')
         self.is_running = False
         
     def _get_local_ip(self):
@@ -76,6 +79,8 @@ class NodeRegistry:
                     'host': self.host,
                     'port': self.port,
                     'max_sessions': self.max_sessions,
+                    'region': self.region,
+                    'zone': self.zone,
                     'last_seen': time.time()
                 }
                 
@@ -101,14 +106,35 @@ class NodeRegistry:
         except Exception as e:
             logger.error(f"Failed to update load: {e}")
 
-    async def get_best_node(self, exclude_nodes: List[str] = None) -> Optional[Dict]:
-        """获取最佳可用节点 (简单的最少连接数策略)"""
+    async def get_best_node(
+        self, 
+        exclude_nodes: List[str] = None,
+        preferred_region: Optional[str] = None,
+        preferred_zone: Optional[str] = None
+    ) -> Optional[Dict]:
+        """
+        获取最佳可用节点
+        
+        调度策略：
+        1. 优先选择 preferred_region 中的节点
+        2. 在相同 region 中，优先选择 preferred_zone 中的节点
+        3. 在相同 region/zone 中，选择负载最低的节点
+        4. 如果没有 preferred_region，则全局选择负载最低的节点
+        
+        Args:
+            exclude_nodes: 排除的节点 ID 列表
+            preferred_region: 首选地域（可选）
+            preferred_zone: 首选可用区（可选，仅在 preferred_region 指定时有效）
+        """
         await self.connect()
         exclude_nodes = exclude_nodes or []
         try:
             nodes = await self.redis.hgetall('nodes')
-            best_node = None
-            min_load = float('inf')
+            
+            # 按优先级分组节点
+            same_region_same_zone = []  # 同地域同可用区
+            same_region_other_zone = []  # 同地域其他可用区
+            other_region = []  # 其他地域
             
             for node_id, info_str in nodes.items():
                 if node_id in exclude_nodes:
@@ -126,10 +152,48 @@ class NodeRegistry:
                 load = await self.redis.hget(f"node_load:{node_id}", "active")
                 current_load = int(load) if load else 0
                 
-                if current_load < info['max_sessions']:
-                    if current_load < min_load:
-                        min_load = current_load
-                        best_node = info
+                # 检查是否还有容量
+                if current_load >= info.get('max_sessions', 10):
+                    continue
+                
+                # 添加负载信息到节点信息中
+                info['current_load'] = current_load
+                
+                # 按地域分组
+                node_region = info.get('region', 'default')
+                node_zone = info.get('zone', 'default')
+                
+                if preferred_region:
+                    if node_region == preferred_region:
+                        if preferred_zone and node_zone == preferred_zone:
+                            same_region_same_zone.append(info)
+                        else:
+                            same_region_other_zone.append(info)
+                    else:
+                        other_region.append(info)
+                else:
+                    # 没有指定地域偏好，所有节点都放在 other_region
+                    other_region.append(info)
+            
+            # 按优先级选择：同地域同可用区 > 同地域其他可用区 > 其他地域
+            # 在每个组内，选择负载最低的节点
+            def find_best_in_group(group):
+                if not group:
+                    return None
+                return min(group, key=lambda x: x['current_load'])
+            
+            best_node = (
+                find_best_in_group(same_region_same_zone) or
+                find_best_in_group(same_region_other_zone) or
+                find_best_in_group(other_region)
+            )
+            
+            if best_node:
+                logger.debug(
+                    f"Selected node {best_node['id']} "
+                    f"(region={best_node.get('region')}, zone={best_node.get('zone')}, "
+                    f"load={best_node['current_load']})"
+                )
             
             return best_node
         except Exception as e:

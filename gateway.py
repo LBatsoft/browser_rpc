@@ -5,7 +5,7 @@ import asyncio  # Added missing import
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, Security, Depends
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security.api_key import APIKeyHeader
 import httpx
@@ -13,7 +13,13 @@ import websockets
 from websockets.client import connect as ws_connect
 
 from core.registry import NodeRegistry
+from core.metrics import (
+    gateway_requests_total, gateway_request_duration_seconds,
+    gateway_retry_total, gateway_node_selection_total,
+    get_metrics, get_metrics_content_type
+)
 from config import get_config
+import time
 
 # 配置日志
 logging.basicConfig(
@@ -59,11 +65,11 @@ async def verify_client_auth(
     if query_token == config.API_KEY:
         return
         
-    # 3. 验证失败 - 提供更详细的错误信息
-    logger.warning(f"API Key validation failed. Header: {api_key}, Query: {query_token}, Expected: {config.API_KEY}")
+    # 3. 验证失败 - 不泄露实际 API Key
+    logger.warning(f"API Key validation failed. Header provided: {bool(api_key)}, Query provided: {bool(query_token)}")
     raise HTTPException(
         status_code=403, 
-        detail=f"Invalid API Key. Please provide 'X-API-Key' header or 'token' query parameter. Expected: {config.API_KEY}"
+        detail="Invalid API Key. Please provide 'X-API-Key' header or 'token' query parameter."
     )
 
 def get_upstream_headers(original_headers: dict = None) -> dict:
@@ -89,9 +95,25 @@ async def shutdown_event():
         await registry.close()
     await http_client.aclose()
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus 指标端点"""
+    from fastapi.responses import Response
+    return Response(
+        content=get_metrics(),
+        media_type=get_metrics_content_type()
+    )
+
 @app.post("/api/sessions", dependencies=[Depends(verify_client_auth)])
 async def create_session(request: Request):
-    """创建会话 - 负载均衡路由 (带重试机制)"""
+    """
+    创建会话 - 负载均衡路由 (带重试机制)
+    
+    支持地域调度：
+    - 通过 Header: X-Preferred-Region, X-Preferred-Zone
+    - 或通过请求体: preferred_region, preferred_zone
+    """
+    start_time = time.time()
     exclude_nodes = []
     last_exception = None
     
@@ -100,14 +122,28 @@ async def create_session(request: Request):
         body = await request.json()
     except Exception:
         body = {}
+    
+    # 获取地域偏好（优先从 Header，其次从请求体）
+    preferred_region = request.headers.get('X-Preferred-Region') or body.get('preferred_region')
+    preferred_zone = request.headers.get('X-Preferred-Zone') or body.get('preferred_zone')
+    
+    # 从 body 中移除地域偏好（避免传递给 Worker）
+    body_clean = {k: v for k, v in body.items() if k not in ('preferred_region', 'preferred_zone')}
 
     # 最多尝试 3 个不同节点
     for attempt in range(3):
         try:
-            # 获取最佳节点
-            node = await registry.get_best_node(exclude_nodes=exclude_nodes)
+            # 获取最佳节点（支持地域偏好）
+            node = await registry.get_best_node(
+                exclude_nodes=exclude_nodes,
+                preferred_region=preferred_region,
+                preferred_zone=preferred_zone
+            )
             if not node:
                 break
+            
+            # 记录节点选择
+            gateway_node_selection_total.labels(node_id=node['id'], status='selected').inc()
             
             # 转发请求
             target_url = f"http://{node['host']}:{node['port']}/api/sessions"
@@ -117,26 +153,45 @@ async def create_session(request: Request):
             # 注入内部通信密钥
             headers = get_upstream_headers()
             
-            response = await http_client.post(target_url, json=body, headers=headers, timeout=10.0)
+            response = await http_client.post(target_url, json=body_clean, headers=headers, timeout=10.0)
             
             if response.status_code >= 500:
                 # 如果是服务端错误，可能是该节点有问题，尝试其他节点
                 logger.warning(f"Node {node['id']} returned {response.status_code}")
+                gateway_node_selection_total.labels(node_id=node['id'], status='failed').inc()
+                gateway_retry_total.labels(operation='create_session', reason='server_error').inc()
                 exclude_nodes.append(node['id'])
                 continue
-                
+            
+            # 记录成功指标
+            duration = time.time() - start_time
+            gateway_request_duration_seconds.labels(method='POST', endpoint='/api/sessions').observe(duration)
+            gateway_requests_total.labels(method='POST', endpoint='/api/sessions', status='success').inc()
+            
             return JSONResponse(content=response.json(), status_code=response.status_code)
             
         except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as e:
-            logger.warning(f"Failed to connect to node {node.get('id', 'unknown')}: {e}")
+            node_id = node.get('id', 'unknown') if node else 'unknown'
+            logger.warning(f"Failed to connect to node {node_id}: {e}")
             if node:
+                gateway_node_selection_total.labels(node_id=node['id'], status='connection_error').inc()
+                gateway_retry_total.labels(operation='create_session', reason='connection_error').inc()
                 exclude_nodes.append(node['id'])
             last_exception = e
         except Exception as e:
             logger.error(f"Gateway create session failed: {e}")
+            # 记录错误指标
+            duration = time.time() - start_time
+            gateway_request_duration_seconds.labels(method='POST', endpoint='/api/sessions').observe(duration)
+            gateway_requests_total.labels(method='POST', endpoint='/api/sessions', status='error').inc()
             # 非网络错误直接抛出
             raise HTTPException(status_code=500, detail=str(e))
             
+    # 记录失败指标
+    duration = time.time() - start_time
+    gateway_request_duration_seconds.labels(method='POST', endpoint='/api/sessions').observe(duration)
+    gateway_requests_total.labels(method='POST', endpoint='/api/sessions', status='failed').inc()
+    
     error_msg = f"Failed to create session after 3 attempts. Last error: {last_exception}"
     logger.error(error_msg)
     raise HTTPException(status_code=503, detail=error_msg)
@@ -151,6 +206,9 @@ async def get_node_for_session(session_id: str):
 @app.api_route("/api/sessions/{session_id}/{path:path}", methods=["GET", "POST", "DELETE", "PUT"], dependencies=[Depends(verify_client_auth)])
 async def proxy_request(session_id: str, path: str, request: Request):
     """通用请求代理 - 基于 Session ID 路由"""
+    start_time = time.time()
+    endpoint = f"/api/sessions/{session_id}/{path}"
+    
     try:
         node = await get_node_for_session(session_id)
         target_url = f"http://{node['host']}:{node['port']}/api/sessions/{session_id}/{path}"
@@ -178,6 +236,12 @@ async def proxy_request(session_id: str, path: str, request: Request):
                 logger.info(f"Proxying {request.method} {path} to {target_url} (Attempt {attempt+1})")
                 response = await http_client.request(**params)
                 
+                # 记录成功指标
+                duration = time.time() - start_time
+                gateway_request_duration_seconds.labels(method=request.method, endpoint=endpoint).observe(duration)
+                status = 'success' if response.status_code < 400 else 'client_error' if response.status_code < 500 else 'server_error'
+                gateway_requests_total.labels(method=request.method, endpoint=endpoint, status=status).inc()
+                
                 # 透传响应状态码和内容
                 content = response.content
                 try:
@@ -190,15 +254,24 @@ async def proxy_request(session_id: str, path: str, request: Request):
 
             except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as e:
                 logger.warning(f"Proxy request failed (Attempt {attempt+1}): {e}")
+                gateway_retry_total.labels(operation='proxy_request', reason='network_error').inc()
                 last_error = e
                 await asyncio.sleep(0.5)
-                
+        
+        # 记录失败指标
+        duration = time.time() - start_time
+        gateway_request_duration_seconds.labels(method=request.method, endpoint=endpoint).observe(duration)
+        gateway_requests_total.labels(method=request.method, endpoint=endpoint, status='failed').inc()
+        
         raise HTTPException(status_code=504, detail=f"Upstream request failed after 3 attempts: {last_error}")
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Proxy failed: {e}")
+        duration = time.time() - start_time
+        gateway_request_duration_seconds.labels(method=request.method, endpoint=endpoint).observe(duration)
+        gateway_requests_total.labels(method=request.method, endpoint=endpoint, status='error').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/sessions/{session_id}", dependencies=[Depends(verify_client_auth)])

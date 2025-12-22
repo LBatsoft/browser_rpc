@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: browser-rpc-config
+  namespace: browser-rpc
+data:
+  # Redis 配置
+  REDIS_URL: "redis://redis-service:6379/0"
+  # 默认配置
+  MAX_SESSIONS: "10"
+  SESSION_TIMEOUT: "3600"
+  DEFAULT_HEADLESS: "true"
+  DEFAULT_WIDTH: "1920"
+  DEFAULT_HEIGHT: "1080"
+  LOG_LEVEL: "INFO"
+
