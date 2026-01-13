@@ -4,31 +4,47 @@
 
 ```
 browser_rpc/
-├── core/                    # 核心模块
-│   ├── metrics.py          # Prometheus 监控指标
-│   └── registry.py         # 节点注册与发现
+├── src/
+│   └── browser_rpc/          # 主包目录
+│       ├── __init__.py
+│       ├── client/          # 客户端代码
+│       │   ├── __init__.py
+│       │   ├── rpc_client.py
+│       │   └── http_client.py
+│       ├── server/          # 服务器代码
+│       │   ├── __init__.py
+│       │   ├── rpc_server.py
+│       │   ├── http_server.py
+│       │   └── gateway.py
+│       ├── core/            # 核心模块
+│       │   ├── __init__.py
+│       │   ├── cdp_client.py
+│       │   ├── config.py
+│       │   ├── metrics.py
+│       │   └── registry.py
+│       └── proto_gen/       # 生成的 proto 文件
+│           ├── __init__.py
+│           ├── spider_pb2.py
+│           └── spider_pb2_grpc.py
+│
+├── proto/                   # Protocol Buffers 定义
+│   └── spider.proto
 │
 ├── docs/                    # 文档目录
 │   ├── README_CN.md        # 中文 README
 │   ├── test_guide.md       # 测试指南
-│   ├── code_review.md      # 代码审查报告
 │   └── ...                 # 其他文档
 │
 ├── k8s/                     # Kubernetes 部署文件
 │   ├── *.yaml              # K8s 资源清单
-│   ├── README.md           # K8s 部署指南
-│   ├── TEST_GUIDE.md      # K8s 测试指南
-│   └── *.sh, *.py          # 测试脚本
+│   └── ...
 │
 ├── monitoring/              # 监控配置
 │   ├── prometheus.yml      # Prometheus 配置
 │   └── grafana/            # Grafana 配置
 │
-├── proto/                   # Protocol Buffers 定义
-│   └── spider.proto
-│
 ├── resources/               # 资源文件
-│   ├── screenshots/        # 截图目录（空，由 .gitignore 忽略）
+│   ├── screenshots/        # 截图目录
 │   └── stealth/            # 反检测脚本
 │
 ├── scripts/                 # 脚本目录
@@ -42,13 +58,10 @@ browser_rpc/
 │
 ├── log/                     # 日志目录（由 .gitignore 忽略）
 │
-├── gateway.py              # Gateway 服务
-├── http_server.py          # Worker HTTP 服务
-├── http_client.py          # HTTP 客户端
-├── rpc_server.py           # gRPC 服务
-├── rpc_client.py           # gRPC 客户端
-├── cdp_client.py           # CDP 客户端
-├── config.py               # 配置管理
+├── gateway.py              # Gateway 入口脚本（向后兼容）
+├── http_server.py          # HTTP Server 入口脚本（向后兼容）
+├── rpc_server.py           # RPC Server 入口脚本（向后兼容）
+├── rpc_client.py           # RPC Client 入口脚本（向后兼容）
 │
 ├── docker-compose.yml      # Docker Compose 配置
 ├── Dockerfile              # Docker 镜像构建
@@ -63,17 +76,23 @@ browser_rpc/
 
 **核心组件**:
 - `proto/spider.proto` - **RPC 接口定义**（13个核心接口）
-- `rpc_server.py` - **RPC 服务器**（核心服务）
-- `rpc_client.py` - **RPC 客户端**（Python API）
-- `cdp_client.py` - **浏览器控制核心**（CDP 封装，反检测集成）
-- `spider_pb2.py`, `spider_pb2_grpc.py` - 生成的 gRPC 代码
+- `src/browser_rpc/server/rpc_server.py` - **RPC 服务器**（核心服务）
+- `src/browser_rpc/client/rpc_client.py` - **RPC 客户端**（Python API）
+- `src/browser_rpc/core/cdp_client.py` - **浏览器控制核心**（CDP 封装，反检测集成）
+- `src/browser_rpc/proto_gen/spider_pb2.py`, `spider_pb2_grpc.py` - 生成的 gRPC 代码
 
 **扩展功能**:
-- `gateway.py` - 统一网关，负责路由和负载均衡（可选）
-- `http_server.py` - Worker 节点的 HTTP API 服务（可选）
-- `http_client.py` - HTTP 客户端（可选）
-- `core/registry.py` - 服务注册与发现（分布式架构）
-- `core/metrics.py` - Prometheus 监控指标（监控增强）
+- `src/browser_rpc/server/gateway.py` - 统一网关，负责路由和负载均衡（可选）
+- `src/browser_rpc/server/http_server.py` - Worker 节点的 HTTP API 服务（可选）
+- `src/browser_rpc/client/http_client.py` - HTTP 客户端（可选）
+- `src/browser_rpc/core/registry.py` - 服务注册与发现（分布式架构）
+- `src/browser_rpc/core/metrics.py` - Prometheus 监控指标（监控增强）
+
+**向后兼容入口脚本**:
+- `gateway.py` - Gateway 入口（导入新包结构）
+- `http_server.py` - HTTP Server 入口（导入新包结构）
+- `rpc_server.py` - RPC Server 入口（导入新包结构）
+- `rpc_client.py` - RPC Client 入口（导入新包结构）
 
 ### 配置文件
 - `docker-compose.yml` - 本地开发环境

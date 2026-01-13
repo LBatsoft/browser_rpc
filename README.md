@@ -292,15 +292,17 @@ Configuration is managed via Environment Variables (or `config.py` defaults).
 
 ```
 browser_rpc/
-├── core/
-│   └── registry.py           # Service discovery & Load balancing logic
+├── src/browser_rpc/          # Main package
+│   ├── client/              # Client code (RPC & HTTP)
+│   ├── server/               # Server code (RPC, HTTP, Gateway)
+│   ├── core/                # Core modules (CDP, config, metrics, registry)
+│   └── proto_gen/           # Generated proto files
 ├── proto/                    # gRPC definitions
 ├── static/                   # Remote Control UI
 ├── scripts/                  # Helper scripts
-├── gateway.py                # API Gateway entry point
-├── http_server.py            # Worker Node entry point
-├── cdp_client.py             # Playwright/CDP wrapper
-├── config.py                 # Configuration loader
+├── gateway.py                # Gateway entry point (backward compatible)
+├── http_server.py            # Worker entry point (backward compatible)
+├── rpc_server.py             # RPC server entry point (backward compatible)
 ├── docker-compose.yml        # Docker orchestration
 └── Dockerfile                # Container definition
 ```
@@ -313,6 +315,39 @@ browser_rpc/
 - ✅ WebGL fingerprint consistency
 - ✅ Permission state simulation
 
+## 📋 Specification-Driven Development (SDD)
+
+This project uses **LeanSpec** for Specification-Driven Development. All changes should be based on specifications in the `specs/` directory.
+
+### Quick Reference
+
+```bash
+# View project status
+lean-spec board
+
+# List all specs
+lean-spec list
+
+# View a spec
+lean-spec view 001-browser-rpc-core
+
+# Create new spec
+lean-spec create feature-name --tags feature --priority high
+
+# Update spec status
+lean-spec update spec-name --status in-progress
+```
+
+**See [LeanSpec Guide](./docs/lean-spec-guide.md) for detailed usage.**
+
+### Current Specs
+
+- `001-browser-rpc-core` - Core RPC service (✅ Complete)
+- `002-distributed-architecture` - Distributed architecture (✅ Complete)
+- `003-monitoring-observability` - Monitoring & observability (✅ Complete)
+- `004-region-aware-routing` - Region-aware routing (✅ Complete)
+- `005-kubernetes-deployment` - K8s deployment (✅ Complete)
+
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details
@@ -321,3 +356,4 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 **Version**: 2.0.0 (Distributed)
 **Status**: ✅ Production Ready
+**SDD**: ✅ LeanSpec-based

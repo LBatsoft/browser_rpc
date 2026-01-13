@@ -62,7 +62,7 @@ RUN playwright install chromium
 COPY . .
 
 # 编译 proto 文件
-RUN python -m grpc_tools.protoc -I./proto --python_out=. --grpc_python_out=. ./proto/spider.proto
+RUN python -m grpc_tools.protoc -I./proto --python_out=src/browser_rpc/proto_gen --grpc_python_out=src/browser_rpc/proto_gen ./proto/spider.proto
 
 # 创建日志目录
 RUN mkdir -p log

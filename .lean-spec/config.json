@@ -1,0 +1,6 @@
+{
+  "specsDir": "specs",
+  "templatesDir": ".lean-spec/templates",
+  "defaultStatus": "planned",
+  "defaultPriority": "medium"
+}

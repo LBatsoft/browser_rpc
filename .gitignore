@@ -68,3 +68,7 @@ htmlcov/
 # 其他
 *.bak
 *.orig
+
+# LeanSpec
+.lean-spec/cache/
+.lean-spec/temp/
